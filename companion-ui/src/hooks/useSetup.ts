@@ -8,7 +8,10 @@ export function useSetup() {
   };
 }
 
-export function saveSetup(jellyfinUrl: string, apiKey: string) {
+export function saveSetup(jellyfinUrl: string, apiKey: string, apiUrl: string) {
   localStorage.setItem("jellyfilter:jellyfin_url", jellyfinUrl.replace(/\/$/, ""));
   localStorage.setItem("jellyfilter:api_key", apiKey);
+  if (apiUrl.trim()) {
+    localStorage.setItem("jellyfilter:api_url", apiUrl.replace(/\/$/, ""));
+  }
 }

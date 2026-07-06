@@ -2,8 +2,9 @@ import { useState } from "react";
 import { saveSetup } from "../hooks/useSetup";
 
 export function Setup() {
-  const [url, setUrl] = useState("http://your-jellyfin-host:8096");
-  const [key, setKey] = useState("");
+  const [jellyfinUrl, setJellyfinUrl] = useState(localStorage.getItem("jellyfilter:jellyfin_url") ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [apiUrl, setApiUrl] = useState(localStorage.getItem("jellyfilter:api_url") ?? "");
   const [error, setError] = useState("");
   const [testing, setTesting] = useState(false);
 
@@ -12,9 +13,9 @@ export function Setup() {
     setError("");
     setTesting(true);
     try {
-      const res = await fetch(`${url.replace(/\/$/, "")}/System/Info/Public`);
+      const res = await fetch(`${jellyfinUrl.replace(/\/$/, "")}/System/Info/Public`);
       if (!res.ok) throw new Error("Could not reach Jellyfin server");
-      saveSetup(url, key);
+      saveSetup(jellyfinUrl, apiKey, apiUrl);
       window.location.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connection failed");
@@ -35,8 +36,8 @@ export function Setup() {
             </label>
             <input
               type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              value={jellyfinUrl}
+              onChange={(e) => setJellyfinUrl(e.target.value)}
               placeholder="http://your-jellyfin-host:8096"
               required
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
@@ -46,12 +47,25 @@ export function Setup() {
             <label className="block text-sm font-medium text-gray-300 mb-1">API Key</label>
             <input
               type="password"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
               placeholder="Generate in Jellyfin → Dashboard → API Keys"
               required
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              JellyFilter API URL
+            </label>
+            <input
+              type="url"
+              value={apiUrl}
+              onChange={(e) => setApiUrl(e.target.value)}
+              placeholder="http://your-docker-host:8765"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500"
+            />
+            <p className="text-xs text-gray-600 mt-1">The whisper pipeline API. Leave blank to use the default.</p>
           </div>
           {error && <p className="text-red-400 text-sm">{error}</p>}
           <button
