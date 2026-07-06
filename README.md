@@ -1,6 +1,6 @@
 # JellyFilter
 
-Transparent content filtering for Jellyfin. Whisper transcribes your media library, detects profanity, and mutes it at transcode time — across every Jellyfin client, with no client-side changes required.
+Transparent content filtering for Jellyfin. Whisper transcribes your media library to detect profanity, and NudeNet scans frames to detect explicit visual content — both are muted at transcode time across every Jellyfin client, with no client-side changes required.
 
 ## How it works
 
@@ -8,6 +8,7 @@ Transparent content filtering for Jellyfin. Whisper transcribes your media libra
 ┌─────────────────────────────────────────────────────┐
 │  Whisper Pipeline (Docker)                          │
 │  Scans media → transcribes → detects profanity      │
+│  → extracts frames → NudeNet visual detection       │
 │  → writes EDL JSON files to shared storage          │
 └───────────────────┬─────────────────────────────────┘
                     │  {edl_dir}/{jellyfin-id}.jellyfilter.json
@@ -30,7 +31,7 @@ Transparent content filtering for Jellyfin. Whisper transcribes your media libra
 │  → library grid with Filtered/Pending/No Data badges │
 │  → per-item EDL viewer + transcript                  │
 │  → processing queue                                  │
-│  → preferences (categories, severity threshold)     │
+│  → preferences (category toggles)                   │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -44,7 +45,7 @@ Jellyfin's plugin API has no hook for injecting ffmpeg arguments — `EncodingHe
 
 | Directory | Language | Purpose |
 |---|---|---|
-| `whisper-pipeline/` | Python 3.11 | Transcription + profanity detection |
+| `whisper-pipeline/` | Python 3.11 | Transcription, profanity detection, NudeNet visual detection |
 | `plugin/` | C# .NET 9 | REST API + force-transcode logic |
 | `plugin/ffmpeg-wrapper/` | Python | ffmpeg intercept + filter injection |
 | `companion-ui/` | React/Vite/Tailwind | Management interface |
@@ -94,9 +95,11 @@ One file per media item at `{edl_dir}/{jellyfin-item-id}.jellyfilter.json`:
 
 ---
 
-## Profanity Detection
+## Detection
 
-The whisper pipeline uses a two-layer approach:
+### Profanity (audio)
+
+Two-layer approach:
 
 1. **Regex word list** (high confidence, no ML) — targets variants of: `fuck`, `shit`, `bitch`, `bastard`, `goddamn`, `asshole`, `cunt`, `cock`, `dick`, `pussy`, `whore`, `slut`, racial slurs. Confidence is always 0.99.
 2. **`profanity-check` ML model** (fallback) — catches borderline language at ≥70% probability.
@@ -104,6 +107,21 @@ The whisper pipeline uses a two-layer approach:
 **Intentionally allowed:** `hell`, `damn`, `damned`, `heck`, `crap`, `ass`
 
 Each detected word gets ±0.15s padding applied before writing to the EDL.
+
+### Sexual content (visual)
+
+[NudeNet](https://github.com/notAI-tech/NudeNet) frame analysis — disabled by default, enable in `config.yaml`:
+
+```yaml
+nudity:
+  enabled: true
+  frame_rate: 1.0            # frames per second to extract
+  confidence_threshold: 0.5
+  min_scene_duration: 1.0    # seconds — drop short false positives
+  merge_gap: 3.0             # seconds — merge nearby detections into one scene
+```
+
+ffmpeg extracts frames at the configured rate, NudeNet scores each frame, and nearby positive frames are merged into scenes. Detected scenes are written to the EDL as `category: "sexual-content"` entries alongside any profanity entries.
 
 ---
 
