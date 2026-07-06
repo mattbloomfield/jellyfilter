@@ -59,7 +59,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Emby-Token")
         self.end_headers()
 
@@ -67,7 +67,11 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path.rstrip("/")
 
         if path == "/jellyfilter/queue":
-            self._send(200, db.get_all_queue())
+            items = db.get_all_queue()
+            pending = sum(1 for i in items if i["status"] in ("new", "processing"))
+            avg_secs = db.get_avg_processing_seconds()
+            eta_seconds = round(pending * avg_secs) if avg_secs and pending > 0 else None
+            self._send(200, {"items": items, "pending": pending, "eta_seconds": eta_seconds})
 
         elif path.startswith("/jellyfilter/status/"):
             item_id = path.split("/")[-1]
@@ -281,6 +285,57 @@ class Handler(BaseHTTPRequestHandler):
                     updated += 1
             edl_path.write_text(json.dumps(doc, indent=2))
             self._send(200, {"category": category, "suppressed": suppressed, "updated": updated})
+
+        else:
+            self._send(404, {"error": "not found"})
+
+    def do_POST(self):
+        path = urlparse(self.path).path.rstrip("/")
+
+        if path.startswith("/jellyfilter/edl/") and path.endswith("/entries"):
+            # POST /jellyfilter/edl/{itemId}/entries  — add a manual EDL entry
+            parts = path.split("/")
+            item_id = parts[parts.index("edl") + 1]
+            edl_path = Path("/mnt/nfs-media/jellyfilter/edl") / f"{item_id}.jellyfilter.json"
+            if not edl_path.exists():
+                self._send(404, {"error": "no EDL for this item — process it first"})
+                return
+            body = self._body()
+            start = body.get("start")
+            end = body.get("end")
+            if start is None or end is None or end <= start:
+                self._send(400, {"error": "start and end (seconds) required; end must be > start"})
+                return
+            import uuid as _uuid
+            entry = {
+                "id": str(_uuid.uuid4()),
+                "start": round(float(start), 3),
+                "end": round(float(end), 3),
+                "type": "mute",
+                "category": body.get("category", "profanity"),
+                "source": "manual",
+                "confirmed": True,
+            }
+            if body.get("word"):
+                entry["word"] = str(body["word"]).lower().strip()
+            doc = json.loads(edl_path.read_text())
+            doc["entries"].append(entry)
+            doc["entries"].sort(key=lambda e: e["start"])
+            edl_path.write_text(json.dumps(doc, indent=2))
+            self._send(201, entry)
+
+        elif path.startswith("/jellyfilter/queue/") and path.endswith("/retry"):
+            # POST /jellyfilter/queue/{id}/retry  — reset a failed item to 'new'
+            parts = path.split("/")
+            try:
+                queue_id = int(parts[parts.index("queue") + 1])
+            except (ValueError, IndexError):
+                self._send(400, {"error": "invalid queue id"})
+                return
+            if db.retry_by_id(queue_id):
+                self._send(200, {"queued": True})
+            else:
+                self._send(404, {"error": "item not found or not in failed state"})
 
         else:
             self._send(404, {"error": "not found"})

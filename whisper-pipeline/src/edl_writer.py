@@ -43,7 +43,7 @@ def write_edl(
             "id": str(uuid.uuid4()),
             "start": round(scene.start, 3),
             "end": round(scene.end, 3),
-            "type": "mute",
+            "type": "skip",
             "category": "sexual-content",
             "labels": scene.labels,
             "confidence": scene.confidence,

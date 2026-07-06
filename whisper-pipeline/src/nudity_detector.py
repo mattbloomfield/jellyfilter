@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
@@ -15,6 +16,7 @@ except ImportError:
     _NUDENET_AVAILABLE = False
 
 _detector_instance = None
+_detector_lock = threading.Lock()
 
 # NudeNet v3 labels that indicate sexual content, grouped by severity
 _FLAGGED_LABELS = {
@@ -36,8 +38,9 @@ class DetectedScene:
 
 def _get_detector():
     global _detector_instance
-    if _detector_instance is None:
-        _detector_instance = _NudeDetector()
+    with _detector_lock:
+        if _detector_instance is None:
+            _detector_instance = _NudeDetector()
     return _detector_instance
 
 

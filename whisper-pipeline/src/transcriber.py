@@ -1,4 +1,5 @@
 import logging
+import threading
 from pathlib import Path
 from typing import Iterator
 
@@ -7,14 +8,16 @@ from faster_whisper import WhisperModel
 log = logging.getLogger(__name__)
 
 _model: WhisperModel | None = None
+_model_lock = threading.Lock()
 
 
 def _load_model(model_name: str, device: str, compute_type: str) -> WhisperModel:
     global _model
-    if _model is None:
-        log.info("Loading whisper model %s on %s (%s)…", model_name, device, compute_type)
-        _model = WhisperModel(model_name, device=device, compute_type=compute_type)
-        log.info("Model loaded.")
+    with _model_lock:
+        if _model is None:
+            log.info("Loading whisper model %s on %s (%s)…", model_name, device, compute_type)
+            _model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            log.info("Model loaded.")
     return _model
 
 

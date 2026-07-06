@@ -1,8 +1,11 @@
+import json as _json
 import logging
 import os
 import signal
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -23,19 +26,17 @@ logging.basicConfig(
 )
 log = logging.getLogger("jellyfilter")
 
-_shutdown = False
+_shutdown = threading.Event()
 
 
 def _handle_signal(sig, frame):
-    global _shutdown
     log.info("Shutdown signal received.")
-    _shutdown = True
+    _shutdown.set()
 
 
 def load_config(path: str = "/config/config.yaml") -> dict:
     with open(path) as f:
         cfg = yaml.safe_load(f)
-    # Allow env var overrides
     if api_key := os.environ.get("JELLYFIN_API_KEY"):
         cfg.setdefault("jellyfin", {})["api_key"] = api_key
     return cfg
@@ -59,7 +60,6 @@ def process_one(cfg: dict, jellyfin: JellyfinClient) -> bool:
             compute_type=w.get("compute_type", "int8"),
         )
 
-        import json as _json
         db.save_transcript(
             media_path,
             segments_json=_json.dumps(segments),
@@ -87,7 +87,6 @@ def process_one(cfg: dict, jellyfin: JellyfinClient) -> bool:
 
         duration = jellyfin.get_duration(jellyfin_id) if jellyfin_id else None
         if not duration:
-            # Estimate from transcript: last word end time
             duration = word_tokens[-1]["end"] + 5.0 if word_tokens else 0.0
 
         p = cfg.get("profanity", {})
@@ -113,6 +112,18 @@ def process_one(cfg: dict, jellyfin: JellyfinClient) -> bool:
     return True
 
 
+def _worker_loop(cfg: dict, jellyfin: JellyfinClient):
+    """Worker thread: continuously processes items until shutdown."""
+    while not _shutdown.is_set():
+        try:
+            processed = process_one(cfg, jellyfin)
+        except Exception:
+            log.exception("Unexpected error in worker loop")
+            processed = False
+        if not processed:
+            _shutdown.wait(timeout=10)
+
+
 def main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
@@ -128,27 +139,30 @@ def main():
         api_key=cfg["jellyfin"].get("api_key", ""),
     )
 
-    # Prefer paths from preferences.json (_pipeline key) over config.yaml
-    import json as _json2
     _prefs_file = Path("/mnt/nfs-media/jellyfilter/preferences.json")
     if _prefs_file.exists():
         try:
-            _prefs = _json2.loads(_prefs_file.read_text())
+            _prefs = _json.loads(_prefs_file.read_text())
             media_paths = _prefs.get("_pipeline", {}).get("media_paths") or cfg.get("media_paths", [])
         except Exception:
             media_paths = cfg.get("media_paths", [])
     else:
         media_paths = cfg.get("media_paths", [])
+
     scan_existing(media_paths)
     observer = start_watcher(media_paths)
 
-    log.info("JellyFilter whisper pipeline started.")
+    max_workers = cfg.get("max_workers", 1)
+    log.info("JellyFilter whisper pipeline started (%d worker(s)).", max_workers)
 
     try:
-        while not _shutdown:
-            processed = process_one(cfg, jellyfin)
-            if not processed:
-                time.sleep(10)  # idle poll
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="jf-worker") as executor:
+            futures = [executor.submit(_worker_loop, cfg, jellyfin) for _ in range(max_workers)]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception:
+                    log.exception("Worker thread exited with error")
     finally:
         observer.stop()
         observer.join()

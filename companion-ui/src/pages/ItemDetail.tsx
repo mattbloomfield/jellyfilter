@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, type EdlEntry } from "../api/jellyfilter";
+import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, addEntry, type EdlEntry, type NewEntryInput } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -43,33 +43,32 @@ function censor(word: string): string {
 // ── Timeline bar ───────────────────────────────────────────────────────────
 
 function FilterTimeline({ entries, duration }: { entries: EdlEntry[]; duration: number }) {
-  const mutes = entries.filter((e) => e.type === "mute");
-  const active = mutes.filter((e) => !e.suppressed);
-  const mutedSecs = active.reduce((n, e) => n + (e.end - e.start), 0);
+  const all = entries.filter((e) => e.type === "mute" || e.type === "skip");
+  const active = all.filter((e) => !e.suppressed);
+  const filteredSecs = active.reduce((n, e) => n + (e.end - e.start), 0);
 
   return (
     <div className="mb-6">
       <div className="flex justify-between text-sm mb-2">
         <span className="text-gray-400">
           Filters{" "}
-          <span className="font-bold text-white">
-            {active.length}/{mutes.length}
-          </span>
+          <span className="font-bold text-white">{active.length}/{all.length}</span>
         </span>
         <span className="text-gray-400">
-          Muted Time{" "}
-          <span className="font-bold text-white">{fmtDuration(mutedSecs)}</span>
+          Filtered Time{" "}
+          <span className="font-bold text-white">{fmtDuration(filteredSecs)}</span>
         </span>
       </div>
       <div className="relative h-7 bg-violet-600 rounded-lg overflow-hidden">
         {active.map((e) => (
           <div
             key={e.id}
-            className="absolute top-0 bottom-0 bg-white opacity-80"
+            className={`absolute top-0 bottom-0 opacity-80 ${e.type === "skip" ? "bg-red-400" : "bg-white"}`}
             style={{
               left: `${(e.start / duration) * 100}%`,
               width: `max(2px, ${((e.end - e.start) / duration) * 100}%)`,
             }}
+            title={e.type === "skip" ? "Scene blackout" : "Muted"}
           />
         ))}
       </div>
@@ -223,6 +222,100 @@ function SceneGroup({ category, entries, onToggleAll, onToggleEntry, pending }: 
   );
 }
 
+const CATEGORIES = ["profanity", "sexual-content", "violence", "substance-use"] as const;
+
+function parseTimecode(tc: string): number | null {
+  const parts = tc.trim().split(":");
+  try {
+    if (parts.length === 3) return +parts[0] * 3600 + +parts[1] * 60 + parseFloat(parts[2]);
+    if (parts.length === 2) return +parts[0] * 60 + parseFloat(parts[1]);
+    if (parts.length === 1) return parseFloat(parts[0]);
+  } catch { /* fall through */ }
+  return null;
+}
+
+function AddEntryForm({ itemId }: { itemId: string }) {
+  const qc = useQueryClient();
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [category, setCategory] = useState<string>("profanity");
+  const [word, setWord] = useState("");
+  const [error, setError] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: (entry: NewEntryInput) => addEntry(itemId, entry),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["edl", itemId] });
+      setStart(""); setEnd(""); setWord(""); setError("");
+    },
+    onError: () => setError("Failed to add entry."),
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const s = parseTimecode(start);
+    const en = parseTimecode(end);
+    if (s == null || isNaN(s)) { setError("Invalid start time."); return; }
+    if (en == null || isNaN(en)) { setError("Invalid end time."); return; }
+    if (en <= s) { setError("End must be after start."); return; }
+    setError("");
+    mutation.mutate({ start: s, end: en, category, word: word.trim() || undefined });
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="mt-4 border border-gray-800 rounded-lg p-4 space-y-3">
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Add Manual Entry</p>
+      <div className="flex gap-2">
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Start</label>
+          <input
+            value={start} onChange={(e) => setStart(e.target.value)}
+            placeholder="1:24:55.32"
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">End</label>
+          <input
+            value={end} onChange={(e) => setEnd(e.target.value)}
+            placeholder="1:24:57.88"
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-xs text-gray-500 mb-1">Category</label>
+          <select
+            value={category} onChange={(e) => setCategory(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:ring-1 focus:ring-violet-500"
+          >
+            {CATEGORIES.map((c) => (
+              <option key={c} value={c}>{CATEGORY_LABELS[c] ?? c}</option>
+            ))}
+          </select>
+        </div>
+        {category === "profanity" && (
+          <div className="flex-1">
+            <label className="block text-xs text-gray-500 mb-1">Word</label>
+            <input
+              value={word} onChange={(e) => setWord(e.target.value)}
+              placeholder="optional"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-white font-mono placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-violet-500"
+            />
+          </div>
+        )}
+      </div>
+      {error && <p className="text-red-400 text-xs">{error}</p>}
+      <button
+        type="submit"
+        disabled={mutation.isPending}
+        className="bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-medium rounded px-3 py-1.5 transition-colors"
+      >
+        {mutation.isPending ? "Adding…" : "Add Entry"}
+      </button>
+    </form>
+  );
+}
+
 function WordFilterView({ itemId }: { itemId: string }) {
   const qc = useQueryClient();
 
@@ -280,11 +373,11 @@ function WordFilterView({ itemId }: { itemId: string }) {
   if (isLoading) return <p className="text-gray-400 text-sm">Loading…</p>;
   if (!edl) return <p className="text-gray-500 text-sm italic">No filter data yet — still processing.</p>;
 
-  const mutes = edl.entries.filter((e) => e.type === "mute");
-  if (!mutes.length) return <p className="text-gray-500 text-sm italic">No detections.</p>;
+  const filtered = edl.entries.filter((e) => e.type === "mute" || e.type === "skip");
+  if (!filtered.length) return <p className="text-gray-500 text-sm italic">No detections.</p>;
 
   // Word-based entries (profanity), grouped by word
-  const wordEntries = mutes.filter((e) => e.word != null);
+  const wordEntries = filtered.filter((e) => e.word != null);
   const wordGroups = new Map<string, EdlEntry[]>();
   for (const e of wordEntries) {
     const key = e.word!;
@@ -293,7 +386,7 @@ function WordFilterView({ itemId }: { itemId: string }) {
   const sortedWords = [...wordGroups.entries()].sort((a, b) => b[1].length - a[1].length);
 
   // Scene-based entries (visual detections), grouped by category
-  const sceneEntries = mutes.filter((e) => e.word == null);
+  const sceneEntries = filtered.filter((e) => e.word == null);
   const sceneGroups = new Map<string, EdlEntry[]>();
   for (const e of sceneEntries) {
     const key = e.category;
@@ -327,6 +420,7 @@ function WordFilterView({ itemId }: { itemId: string }) {
           />
         ))}
       </div>
+      <AddEntryForm itemId={itemId} />
     </div>
   );
 }

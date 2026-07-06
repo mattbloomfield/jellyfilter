@@ -18,6 +18,8 @@ profanity:
   padding_after: 0.15
   word_list: custom      # uses built-in custom list focused on strong profanity
 
+max_workers: 1  # number of files to process in parallel (increase with caution — doubles RAM usage)
+
 nudity:
   enabled: false              # set to true to enable NudeNet visual detection
   frame_rate: 1.0             # frames per second to extract (1.0 is usually sufficient)

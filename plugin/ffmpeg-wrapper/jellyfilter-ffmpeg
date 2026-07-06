@@ -3,6 +3,9 @@
 JellyFilter ffmpeg wrapper.
 Intercepts Jellyfin's ffmpeg calls, injects -af volume mute filters from EDL files.
 Filters by category based on /mnt/nfs-media/jellyfilter/preferences.json.
+
+Skip entries black out video (drawbox) + mute audio to keep the timeline intact.
+True frame removal would change stream duration, breaking Jellyfin seek/progress.
 """
 import json
 import os
@@ -14,12 +17,12 @@ REAL_FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
 EDL_DIR = "/mnt/nfs-media/jellyfilter/edl"
 PREFS_FILE = "/mnt/nfs-media/jellyfilter/preferences.json"
 AF_INLINE_LIMIT = 4000
+VF_INLINE_LIMIT = 4000
 
 
 def load_prefs() -> dict:
     try:
         data = json.loads(Path(PREFS_FILE).read_text())
-        # Return first user's prefs, or default
         if data:
             return next(iter(data.values()))
     except Exception:
@@ -68,15 +71,33 @@ def find_edl_for_path(media_path: str) -> dict | None:
 
 
 def build_af_filter(entries: list[dict], prefs: dict) -> str:
+    """Audio mute filter for mute and skip entries."""
     parts = []
     for e in entries:
         if e.get("suppressed"):
             continue
-        if e.get("type") == "mute" and entry_matches_prefs(e, prefs):
+        if e.get("type") in ("mute", "skip") and entry_matches_prefs(e, prefs):
             parts.append(
                 f"volume=enable='between(t,{e['start']},{e['end']})':volume=0"
             )
     return ",".join(parts)
+
+
+def build_vf_filter(entries: list[dict], prefs: dict) -> str:
+    """Video blackout filter for skip entries only."""
+    parts = []
+    for e in entries:
+        if e.get("suppressed"):
+            continue
+        if e.get("type") == "skip" and entry_matches_prefs(e, prefs):
+            parts.append(
+                f"drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='between(t,{e['start']},{e['end']})'"
+            )
+    return ",".join(parts)
+
+
+def has_filter_complex(args: list[str]) -> bool:
+    return "-filter_complex" in args
 
 
 def inject_af(args: list[str], af_filter: str) -> list[str]:
@@ -89,7 +110,7 @@ def inject_af(args: list[str], af_filter: str) -> list[str]:
 
 
 def inject_af_script(args: list[str], af_filter: str) -> list[str]:
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", prefix="jf_", delete=False)
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", prefix="jf_af_", delete=False)
     f.write(af_filter)
     f.flush()
     f.close()
@@ -102,6 +123,34 @@ def inject_af_script(args: list[str], af_filter: str) -> list[str]:
     return args[:-1] + ["-filter_script:a", f.name, args[-1]]
 
 
+def inject_vf(args: list[str], vf_filter: str) -> list[str]:
+    # Don't inject if Jellyfin is using a complex filtergraph — would conflict.
+    if has_filter_complex(args):
+        return args
+    args = list(args)
+    for i, arg in enumerate(args):
+        if arg == "-vf" and i + 1 < len(args):
+            args[i + 1] = args[i + 1] + "," + vf_filter
+            return args
+    return args[:-1] + ["-vf", vf_filter, args[-1]]
+
+
+def inject_vf_script(args: list[str], vf_filter: str) -> list[str]:
+    if has_filter_complex(args):
+        return args
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", prefix="jf_vf_", delete=False)
+    f.write(vf_filter)
+    f.flush()
+    f.close()
+    args = list(args)
+    for i, arg in enumerate(args):
+        if arg == "-vf" and i + 1 < len(args):
+            args[i] = "-filter_script:v"
+            args[i + 1] = f.name
+            return args
+    return args[:-1] + ["-filter_script:v", f.name, args[-1]]
+
+
 def main() -> None:
     args = sys.argv[1:]
     prefs = load_prefs()
@@ -111,13 +160,21 @@ def main() -> None:
             edl = find_edl_for_path(input_path)
             if not edl or not edl.get("entries"):
                 continue
+
             af_filter = build_af_filter(edl["entries"], prefs)
-            if not af_filter:
-                continue
-            if len(af_filter) > AF_INLINE_LIMIT:
-                args = inject_af_script(args, af_filter)
-            else:
-                args = inject_af(args, af_filter)
+            if af_filter:
+                if len(af_filter) > AF_INLINE_LIMIT:
+                    args = inject_af_script(args, af_filter)
+                else:
+                    args = inject_af(args, af_filter)
+
+            vf_filter = build_vf_filter(edl["entries"], prefs)
+            if vf_filter:
+                if len(vf_filter) > VF_INLINE_LIMIT:
+                    args = inject_vf_script(args, vf_filter)
+                else:
+                    args = inject_vf(args, vf_filter)
+
             break
 
     os.execv(REAL_FFMPEG, [REAL_FFMPEG] + args)

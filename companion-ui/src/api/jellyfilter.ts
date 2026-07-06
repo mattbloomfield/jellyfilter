@@ -44,6 +44,13 @@ export interface QueueItem {
   error_message: string | null;
   hit_count: number | null;
   word_count: number | null;
+  retry_count: number;
+}
+
+export interface QueueResponse {
+  items: QueueItem[];
+  pending: number;
+  eta_seconds: number | null;
 }
 
 export interface EdlEntry {
@@ -86,7 +93,7 @@ export const updatePreferences = (prefs: FilterPreferences) =>
   req<FilterPreferences>("PUT", "/preferences", prefs);
 
 export const fetchEdl = (itemId: string) => req<EdlDocument>("GET", `/edl/${itemId}`);
-export const fetchQueue = () => req<QueueItem[]>("GET", "/queue");
+export const fetchQueue = () => req<QueueResponse>("GET", "/queue");
 export const fetchItemStatus = (itemId: string) =>
   req<{ status: string; hit_count: number | null }>("GET", `/status/${itemId}`);
 
@@ -105,6 +112,19 @@ export const toggleCategory = (itemId: string, category: string, suppressed: boo
   req<{ category: string; suppressed: boolean; updated: number }>(
     "PUT", `/edl/${itemId}/category/${encodeURIComponent(category)}`, { suppressed }
   );
+
+export interface NewEntryInput {
+  start: number;
+  end: number;
+  category: string;
+  word?: string;
+}
+
+export const addEntry = (itemId: string, entry: NewEntryInput) =>
+  req<EdlEntry>("POST", `/edl/${itemId}/entries`, entry);
+
+export const retryQueueItem = (queueId: number) =>
+  req<{ queued: boolean }>("POST", `/queue/${queueId}/retry`, {});
 
 export interface PipelineSettings {
   media_paths: string[];

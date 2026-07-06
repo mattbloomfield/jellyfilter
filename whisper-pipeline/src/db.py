@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,14 +18,15 @@ CREATE TABLE IF NOT EXISTS queue (
     finished_at     REAL,
     error_message   TEXT,
     word_count      INTEGER,
-    hit_count       INTEGER
+    hit_count       INTEGER,
+    retry_count     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transcripts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     media_path      TEXT    NOT NULL UNIQUE,
     transcript_text TEXT,
-    word_tokens     TEXT,   -- JSON array of {word, start, end} — full per-word timestamped data
+    word_tokens     TEXT,   -- JSON array of {word, start, end}
     created_at      REAL    NOT NULL
 );
 
@@ -33,9 +35,12 @@ CREATE INDEX IF NOT EXISTS idx_queue_jellyfin_id ON queue(jellyfin_id);
 """
 
 MIGRATIONS = [
-    # Add word_tokens column to existing DBs that predate it
     "ALTER TABLE transcripts ADD COLUMN word_tokens TEXT",
+    "ALTER TABLE queue ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
 ]
+
+# Serialize pop_next across threads so two workers can't claim the same item.
+_pop_lock = threading.Lock()
 
 
 @contextmanager
@@ -43,6 +48,7 @@ def get_conn():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")  # concurrent readers + one writer
     try:
         conn.executescript(SCHEMA)
         for migration in MIGRATIONS:
@@ -76,17 +82,18 @@ def enqueue(media_path: str) -> bool:
 
 
 def pop_next() -> Optional[sqlite3.Row]:
-    """Claim and return the next 'new' item, marking it 'processing'."""
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM queue WHERE status = 'new' ORDER BY added_at LIMIT 1"
-        ).fetchone()
-        if row:
-            conn.execute(
-                "UPDATE queue SET status = 'processing', started_at = ? WHERE id = ?",
-                (time.time(), row["id"]),
-            )
-        return row
+    """Claim and return the next 'new' item, marking it 'processing'. Thread-safe."""
+    with _pop_lock:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM queue WHERE status = 'new' ORDER BY added_at LIMIT 1"
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE queue SET status = 'processing', started_at = ? WHERE id = ?",
+                    (time.time(), row["id"]),
+                )
+            return row
 
 
 def mark_done(media_path: str, jellyfin_id: Optional[str], hit_count: int, word_count: int):
@@ -101,9 +108,32 @@ def mark_done(media_path: str, jellyfin_id: Optional[str], hit_count: int, word_
 def mark_failed(media_path: str, error: str):
     with get_conn() as conn:
         conn.execute(
-            "UPDATE queue SET status='failed', finished_at=?, error_message=? WHERE media_path=?",
+            """UPDATE queue SET status='failed', finished_at=?, error_message=?,
+               retry_count = retry_count + 1 WHERE media_path=?""",
             (time.time(), error, media_path),
         )
+
+
+def retry_item(media_path: str) -> bool:
+    """Reset a failed item back to 'new' so it will be reprocessed."""
+    with get_conn() as conn:
+        result = conn.execute(
+            """UPDATE queue SET status='new', started_at=NULL, finished_at=NULL,
+               error_message=NULL WHERE media_path=? AND status='failed'""",
+            (media_path,),
+        )
+        return result.rowcount > 0
+
+
+def retry_by_id(queue_id: int) -> bool:
+    """Reset a failed item by queue row id."""
+    with get_conn() as conn:
+        result = conn.execute(
+            """UPDATE queue SET status='new', started_at=NULL, finished_at=NULL,
+               error_message=NULL WHERE id=? AND status='failed'""",
+            (queue_id,),
+        )
+        return result.rowcount > 0
 
 
 def save_transcript(media_path: str, segments_json: str, word_tokens_json: str):
@@ -128,6 +158,17 @@ def get_all_queue() -> list:
                LIMIT 500"""
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_avg_processing_seconds() -> Optional[float]:
+    """Average wall-clock processing time for recently completed items."""
+    with get_conn() as conn:
+        row = conn.execute(
+            """SELECT AVG(finished_at - started_at) as avg_secs FROM queue
+               WHERE status='done' AND started_at IS NOT NULL AND finished_at IS NOT NULL
+               ORDER BY finished_at DESC LIMIT 20"""
+        ).fetchone()
+        return row["avg_secs"] if row and row["avg_secs"] else None
 
 
 def get_status(media_path: str) -> Optional[dict]:
