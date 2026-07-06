@@ -24,13 +24,14 @@ export interface JellyfinItem {
   ProductionYear?: number;
   ImageTags?: { Primary?: string };
   SeriesName?: string;
+  Path?: string;
 }
 
 export async function fetchLibraryItems(): Promise<JellyfinItem[]> {
   const data = await get<{ Items: JellyfinItem[] }>("/Items", {
     Recursive: "true",
     IncludeItemTypes: "Movie,Series",
-    Fields: "ImageTags,SeriesName",
+    Fields: "ImageTags,SeriesName,Path",
     Limit: "2000",
     SortBy: "SortName",
     SortOrder: "Ascending",

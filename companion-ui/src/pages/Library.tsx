@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { fetchItemStatus } from "../api/jellyfilter";
+import { fetchItemStatus, fetchPipeline } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
 type FilterStatus = "filtered" | "pending" | "no-data";
@@ -67,8 +67,20 @@ function ItemCard({ item, status }: { item: JellyfinItem; status: FilterStatus }
 export function Library({ items }: { items: JellyfinItem[] }) {
   const [filter, setFilter] = useState<ActiveFilter>("all");
 
+  const { data: pipeline } = useQuery({
+    queryKey: ["pipeline"],
+    queryFn: fetchPipeline,
+  });
+
+  const scanPaths = pipeline?.media_paths ?? [];
+  const scopedItems = scanPaths.length === 0
+    ? items
+    : items.filter((item) =>
+        item.Path != null && scanPaths.some((p) => item.Path!.startsWith(p))
+      );
+
   const statusQueries = useQueries({
-    queries: items.map((item) => ({
+    queries: scopedItems.map((item) => ({
       queryKey: ["item-status", item.Id],
       queryFn: () => fetchItemStatus(item.Id),
       retry: false,
@@ -76,7 +88,7 @@ export function Library({ items }: { items: JellyfinItem[] }) {
   });
 
   const statusMap = new Map<string, FilterStatus>(
-    items.map((item, i) => {
+    scopedItems.map((item, i) => {
       const data = statusQueries[i].data;
       const status: FilterStatus = data?.status === "done" ? "filtered"
         : data ? "pending"
@@ -89,8 +101,8 @@ export function Library({ items }: { items: JellyfinItem[] }) {
   for (const s of statusMap.values()) counts[s]++;
 
   const visibleItems = filter === "all"
-    ? items
-    : items.filter((item) => statusMap.get(item.Id) === filter);
+    ? scopedItems
+    : scopedItems.filter((item) => statusMap.get(item.Id) === filter);
 
   return (
     <div>
@@ -116,7 +128,10 @@ export function Library({ items }: { items: JellyfinItem[] }) {
         </div>
       </div>
 
-      {items.length === 0 && <p className="text-gray-400">Loading library…</p>}
+      {scopedItems.length === 0 && items.length === 0 && <p className="text-gray-400">Loading library…</p>}
+      {scopedItems.length === 0 && items.length > 0 && (
+        <p className="text-gray-500 text-sm">No items found in the configured scan paths.</p>
+      )}
       {visibleItems.length === 0 && items.length > 0 && (
         <p className="text-gray-500 text-sm">No items match this filter.</p>
       )}
