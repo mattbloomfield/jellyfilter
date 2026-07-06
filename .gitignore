@@ -1,0 +1,30 @@
+# Personal/local overrides — never commit
+.claude/CLAUDE.local.md
+.claude/JELLYFILTER_CLAUDE_CODE.md
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build output
+dist/
+build/
+obj/
+bin/
+*.dll
+*.pdb
+
+# Runtime data
+*.db
+*.db-journal
+
+# Secrets and config overrides
+.env
+.env.local
+*.local.yaml
+*.local.yml
+
+# Model cache
+.model-cache/

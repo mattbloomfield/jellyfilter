@@ -1,0 +1,25 @@
+# JellyFilter services — append to your existing docker-compose.yml
+# Edit the volume paths to match your environment before appending.
+
+  jellyfilter-whisper:
+    build:
+      context: /root/jellyfilter/whisper-pipeline
+      dockerfile: Dockerfile
+    container_name: jellyfilter-whisper
+    volumes:
+      - /mnt/media:/mnt/media                             # your media root (read-only recommended)
+      - /mnt/jellyfilter:/mnt/jellyfilter                 # shared jellyfilter data dir (edl, db, prefs)
+      - /root/jellyfilter/whisper-pipeline/config.yaml:/config/config.yaml:ro
+    environment:
+      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY}
+      - CONFIG_PATH=/config/config.yaml
+    restart: unless-stopped
+
+  jellyfilter-ui:
+    build:
+      context: /root/jellyfilter/companion-ui
+      dockerfile: Dockerfile
+    container_name: jellyfilter-ui
+    ports:
+      - "3500:3500"
+    restart: unless-stopped

@@ -1,0 +1,26 @@
+whisper:
+  model: small.en        # small.en is safe on 4GB RAM; upgrade to medium.en if swap usage is low
+  device: cpu            # Intel iGPU in CT 207 — no CUDA
+  compute_type: int8     # best for CPU
+
+media_paths:
+  - /mnt/nfs-media/Movies
+  - /mnt/nfs-media/TV
+
+metadata_dir: /mnt/nfs-media/jellyfilter/edl
+
+jellyfin:
+  base_url: http://your-jellyfin-host:8096
+  api_key: ""            # set via JELLYFIN_API_KEY env var or fill in here
+
+profanity:
+  padding_before: 0.15
+  padding_after: 0.15
+  word_list: custom      # uses built-in custom list focused on strong profanity
+
+nudity:
+  enabled: false              # set to true to enable NudeNet visual detection
+  frame_rate: 1.0             # frames per second to extract (1.0 is usually sufficient)
+  confidence_threshold: 0.5   # minimum NudeNet score to flag a frame
+  min_scene_duration: 1.0     # seconds — drop detections shorter than this (noise filter)
+  merge_gap: 3.0              # seconds — merge nearby detections into one scene

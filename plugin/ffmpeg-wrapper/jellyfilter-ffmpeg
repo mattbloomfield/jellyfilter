@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+JellyFilter ffmpeg wrapper.
+Intercepts Jellyfin's ffmpeg calls, injects -af volume mute filters from EDL files.
+Filters by category based on /mnt/nfs-media/jellyfilter/preferences.json.
+"""
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+REAL_FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
+EDL_DIR = "/mnt/nfs-media/jellyfilter/edl"
+PREFS_FILE = "/mnt/nfs-media/jellyfilter/preferences.json"
+AF_INLINE_LIMIT = 4000
+
+
+def load_prefs() -> dict:
+    try:
+        data = json.loads(Path(PREFS_FILE).read_text())
+        # Return first user's prefs, or default
+        if data:
+            return next(iter(data.values()))
+    except Exception:
+        pass
+    return {
+        "enabled": True,
+        "filters": {
+            "profanity": {"enabled": True},
+            "violence": {"enabled": False},
+            "sexual-content": {"enabled": False},
+            "substance-use": {"enabled": False},
+        },
+    }
+
+
+def entry_matches_prefs(entry: dict, prefs: dict) -> bool:
+    if not prefs.get("enabled", True):
+        return False
+    category = entry.get("category", "profanity")
+    cat_prefs = prefs.get("filters", {}).get(category, {})
+    return cat_prefs.get("enabled", False)
+
+
+def find_input_files(args: list[str]) -> list[str]:
+    inputs = []
+    i = 0
+    while i < len(args):
+        if args[i] == "-i" and i + 1 < len(args):
+            inputs.append(args[i + 1])
+        i += 1
+    return inputs
+
+
+def find_edl_for_path(media_path: str) -> dict | None:
+    edl_dir = Path(EDL_DIR)
+    if not edl_dir.exists():
+        return None
+    for edl_file in edl_dir.glob("*.jellyfilter.json"):
+        try:
+            doc = json.loads(edl_file.read_text())
+            if doc.get("media_path") == media_path:
+                return doc
+        except Exception:
+            pass
+    return None
+
+
+def build_af_filter(entries: list[dict], prefs: dict) -> str:
+    parts = []
+    for e in entries:
+        if e.get("suppressed"):
+            continue
+        if e.get("type") == "mute" and entry_matches_prefs(e, prefs):
+            parts.append(
+                f"volume=enable='between(t,{e['start']},{e['end']})':volume=0"
+            )
+    return ",".join(parts)
+
+
+def inject_af(args: list[str], af_filter: str) -> list[str]:
+    args = list(args)
+    for i, arg in enumerate(args):
+        if arg == "-af" and i + 1 < len(args):
+            args[i + 1] = args[i + 1] + "," + af_filter
+            return args
+    return args[:-1] + ["-af", af_filter, args[-1]]
+
+
+def inject_af_script(args: list[str], af_filter: str) -> list[str]:
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", prefix="jf_", delete=False)
+    f.write(af_filter)
+    f.flush()
+    f.close()
+    args = list(args)
+    for i, arg in enumerate(args):
+        if arg == "-af" and i + 1 < len(args):
+            args[i] = "-filter_script:a"
+            args[i + 1] = f.name
+            return args
+    return args[:-1] + ["-filter_script:a", f.name, args[-1]]
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    prefs = load_prefs()
+
+    if prefs.get("enabled", True):
+        for input_path in find_input_files(args):
+            edl = find_edl_for_path(input_path)
+            if not edl or not edl.get("entries"):
+                continue
+            af_filter = build_af_filter(edl["entries"], prefs)
+            if not af_filter:
+                continue
+            if len(af_filter) > AF_INLINE_LIMIT:
+                args = inject_af_script(args, af_filter)
+            else:
+                args = inject_af(args, af_filter)
+            break
+
+    os.execv(REAL_FFMPEG, [REAL_FFMPEG] + args)
+
+
+if __name__ == "__main__":
+    main()

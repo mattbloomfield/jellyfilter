@@ -1,0 +1,455 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useParams } from "react-router-dom";
+import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, type EdlEntry } from "../api/jellyfilter";
+import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function fmtTime(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
+    : `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+function fmtDuration(secs: number): string {
+  if (secs < 1) return "0s";
+  const m = Math.floor(secs / 60);
+  const s = Math.round(secs % 60);
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+const CENSOR: Record<string, string> = {
+  fuck: "f**k", fucking: "f**king", fucker: "f**ker", fucked: "f**ked", fucks: "f**ks",
+  shit: "sh*t", shitting: "sh*tting", shitty: "sh*tty", bullshit: "bulls**t",
+  bitch: "b*tch", bitches: "b*tches", bitching: "b*tching",
+  bastard: "b*st*rd", bastards: "b*st*rds",
+  goddamn: "g*dd*mn", goddamned: "g*dd*mned", goddammit: "g*dd*mmit",
+  asshole: "*sshole", assholes: "*ssholes",
+  cunt: "c**t", cock: "c**k", dick: "d*ck",
+  pussy: "p*ssy", whore: "wh*re", slut: "sl*t",
+};
+
+function censor(word: string): string {
+  const w = word.toLowerCase();
+  if (CENSOR[w]) return CENSOR[w];
+  if (w.length <= 2) return w;
+  return w[0] + "*".repeat(Math.max(1, w.length - 2)) + w[w.length - 1];
+}
+
+// ── Timeline bar ───────────────────────────────────────────────────────────
+
+function FilterTimeline({ entries, duration }: { entries: EdlEntry[]; duration: number }) {
+  const mutes = entries.filter((e) => e.type === "mute");
+  const active = mutes.filter((e) => !e.suppressed);
+  const mutedSecs = active.reduce((n, e) => n + (e.end - e.start), 0);
+
+  return (
+    <div className="mb-6">
+      <div className="flex justify-between text-sm mb-2">
+        <span className="text-gray-400">
+          Filters{" "}
+          <span className="font-bold text-white">
+            {active.length}/{mutes.length}
+          </span>
+        </span>
+        <span className="text-gray-400">
+          Muted Time{" "}
+          <span className="font-bold text-white">{fmtDuration(mutedSecs)}</span>
+        </span>
+      </div>
+      <div className="relative h-7 bg-violet-600 rounded-lg overflow-hidden">
+        {active.map((e) => (
+          <div
+            key={e.id}
+            className="absolute top-0 bottom-0 bg-white opacity-80"
+            style={{
+              left: `${(e.start / duration) * 100}%`,
+              width: `max(2px, ${((e.end - e.start) / duration) * 100}%)`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  "sexual-content": "Sexual Content",
+  "violence": "Violence",
+  "substance-use": "Substance Use",
+};
+
+// ── Word picker ────────────────────────────────────────────────────────────
+
+function ToggleCircle({ active }: { active: boolean }) {
+  return (
+    <div
+      className={`w-7 h-7 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+        active
+          ? "border-violet-400 bg-violet-900"
+          : "border-gray-600 bg-transparent"
+      }`}
+    >
+      {active && (
+        <div className="w-3 h-3 rounded-full bg-violet-400" />
+      )}
+    </div>
+  );
+}
+
+interface WordGroupProps {
+  word: string;
+  entries: EdlEntry[];
+  onToggle: (word: string, suppressed: boolean) => void;
+  pending: boolean;
+}
+
+function WordGroup({ word, entries, onToggle, pending }: WordGroupProps) {
+  const [expanded, setExpanded] = useState(false);
+  const allSuppressed = entries.every((e) => e.suppressed);
+  const active = !allSuppressed;
+
+  return (
+    <div className="border border-gray-800 rounded-lg overflow-hidden">
+      <div
+        className="flex items-center px-4 py-3 hover:bg-gray-900 cursor-pointer select-none"
+        onClick={() => setExpanded((x) => !x)}
+      >
+        <span className="text-gray-400 text-xs w-4 mr-2 flex-shrink-0">
+          {expanded ? "▼" : "▶"}
+        </span>
+        <span className={`font-mono text-sm flex-1 ${active ? "text-white" : "line-through text-gray-600"}`}>
+          {censor(word)}
+        </span>
+        <span className="text-gray-500 text-sm mr-4">{entries.length}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle(word, !allSuppressed);
+          }}
+          disabled={pending}
+          className="disabled:opacity-50"
+          title={allSuppressed ? "Enable filtering" : "Disable filtering"}
+        >
+          <ToggleCircle active={active} />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-gray-800 divide-y divide-gray-900 bg-gray-950">
+          {entries.map((e) => (
+            <div key={e.id} className="flex items-center px-6 py-2">
+              <span className="text-xs font-mono text-violet-400 w-14 flex-shrink-0">
+                {fmtTime(e.start)}
+              </span>
+              <span className={`text-xs flex-1 ${e.suppressed ? "text-gray-600 line-through" : "text-gray-400"}`}>
+                {censor(word)}
+              </span>
+
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SceneGroupProps {
+  category: string;
+  entries: EdlEntry[];
+  onToggleAll: (suppressed: boolean) => void;
+  onToggleEntry: (entry: EdlEntry, suppressed: boolean) => void;
+  pending: boolean;
+}
+
+function SceneGroup({ category, entries, onToggleAll, onToggleEntry, pending }: SceneGroupProps) {
+  const [expanded, setExpanded] = useState(false);
+  const allSuppressed = entries.every((e) => e.suppressed);
+  const active = !allSuppressed;
+  const label = CATEGORY_LABELS[category] ?? category;
+
+  return (
+    <div className="border border-gray-800 rounded-lg overflow-hidden">
+      <div
+        className="flex items-center px-4 py-3 hover:bg-gray-900 cursor-pointer select-none"
+        onClick={() => setExpanded((x) => !x)}
+      >
+        <span className="text-gray-400 text-xs w-4 mr-2 flex-shrink-0">
+          {expanded ? "▼" : "▶"}
+        </span>
+        <span className={`text-sm flex-1 ${active ? "text-white" : "line-through text-gray-600"}`}>
+          {label}
+        </span>
+        <span className="text-gray-500 text-sm mr-4">{entries.length}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleAll(!allSuppressed);
+          }}
+          disabled={pending}
+          className="disabled:opacity-50"
+          title={allSuppressed ? "Enable filtering" : "Disable filtering"}
+        >
+          <ToggleCircle active={active} />
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-gray-800 divide-y divide-gray-900 bg-gray-950">
+          {entries.map((e) => (
+            <div key={e.id} className="flex items-center px-6 py-2 gap-3">
+              <span className="text-xs font-mono text-violet-400 w-14 flex-shrink-0">
+                {fmtTime(e.start)}
+              </span>
+              <span className={`text-xs flex-1 ${e.suppressed ? "text-gray-600 line-through" : "text-gray-400"}`}>
+                {fmtDuration(e.end - e.start)}
+              </span>
+              <button
+                onClick={() => onToggleEntry(e, !e.suppressed)}
+                disabled={pending}
+                className="disabled:opacity-50"
+              >
+                <ToggleCircle active={!e.suppressed} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WordFilterView({ itemId }: { itemId: string }) {
+  const qc = useQueryClient();
+
+  const { data: edl, isLoading } = useQuery({
+    queryKey: ["edl", itemId],
+    queryFn: () => fetchEdl(itemId),
+    retry: false,
+  });
+
+  const wordMutation = useMutation({
+    mutationFn: ({ word, suppressed }: { word: string; suppressed: boolean }) =>
+      toggleWord(itemId, word, suppressed),
+    onMutate: async ({ word, suppressed }) => {
+      await qc.cancelQueries({ queryKey: ["edl", itemId] });
+      const prev = qc.getQueryData(["edl", itemId]);
+      qc.setQueryData(["edl", itemId], (old: typeof edl) => {
+        if (!old) return old;
+        return { ...old, entries: old.entries.map((e) => e.word === word ? { ...e, suppressed } : e) };
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(["edl", itemId], ctx.prev); },
+  });
+
+  const entryMutation = useMutation({
+    mutationFn: ({ entry, suppressed }: { entry: EdlEntry; suppressed: boolean }) =>
+      suppressEntry(itemId, entry, suppressed),
+    onMutate: async ({ entry, suppressed }) => {
+      await qc.cancelQueries({ queryKey: ["edl", itemId] });
+      const prev = qc.getQueryData(["edl", itemId]);
+      qc.setQueryData(["edl", itemId], (old: typeof edl) => {
+        if (!old) return old;
+        return { ...old, entries: old.entries.map((e) => e.id === entry.id ? { ...e, suppressed } : e) };
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(["edl", itemId], ctx.prev); },
+  });
+
+  const categoryMutation = useMutation({
+    mutationFn: ({ category, suppressed }: { category: string; suppressed: boolean }) =>
+      toggleCategory(itemId, category, suppressed),
+    onMutate: async ({ category, suppressed }) => {
+      await qc.cancelQueries({ queryKey: ["edl", itemId] });
+      const prev = qc.getQueryData(["edl", itemId]);
+      qc.setQueryData(["edl", itemId], (old: typeof edl) => {
+        if (!old) return old;
+        return { ...old, entries: old.entries.map((e) => e.category === category ? { ...e, suppressed } : e) };
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(["edl", itemId], ctx.prev); },
+  });
+
+  if (isLoading) return <p className="text-gray-400 text-sm">Loading…</p>;
+  if (!edl) return <p className="text-gray-500 text-sm italic">No filter data yet — still processing.</p>;
+
+  const mutes = edl.entries.filter((e) => e.type === "mute");
+  if (!mutes.length) return <p className="text-gray-500 text-sm italic">No detections.</p>;
+
+  // Word-based entries (profanity), grouped by word
+  const wordEntries = mutes.filter((e) => e.word != null);
+  const wordGroups = new Map<string, EdlEntry[]>();
+  for (const e of wordEntries) {
+    const key = e.word!;
+    wordGroups.set(key, [...(wordGroups.get(key) ?? []), e]);
+  }
+  const sortedWords = [...wordGroups.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  // Scene-based entries (visual detections), grouped by category
+  const sceneEntries = mutes.filter((e) => e.word == null);
+  const sceneGroups = new Map<string, EdlEntry[]>();
+  for (const e of sceneEntries) {
+    const key = e.category;
+    sceneGroups.set(key, [...(sceneGroups.get(key) ?? []), e]);
+  }
+  const sortedCategories = [...sceneGroups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  const pending = wordMutation.isPending || entryMutation.isPending || categoryMutation.isPending;
+
+  return (
+    <div>
+      <FilterTimeline entries={edl.entries} duration={edl.duration_seconds} />
+      <div className="space-y-1">
+        {sortedWords.map(([word, entries]) => (
+          <WordGroup
+            key={word}
+            word={word}
+            entries={entries}
+            onToggle={(w, suppressed) => wordMutation.mutate({ word: w, suppressed })}
+            pending={pending}
+          />
+        ))}
+        {sortedCategories.map(([category, entries]) => (
+          <SceneGroup
+            key={category}
+            category={category}
+            entries={entries}
+            onToggleAll={(suppressed) => categoryMutation.mutate({ category, suppressed })}
+            onToggleEntry={(entry, suppressed) => entryMutation.mutate({ entry, suppressed })}
+            pending={pending}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Transcript ─────────────────────────────────────────────────────────────
+
+function TranscriptView({ itemId }: { itemId: string }) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["transcript", itemId],
+    queryFn: () => fetchTranscript(itemId),
+    retry: false,
+  });
+
+  if (isLoading) return <p className="text-gray-500 text-sm">Loading transcript…</p>;
+  if (error) return <p className="text-gray-500 text-sm italic">Transcript not yet available.</p>;
+  if (!data) return null;
+
+  if (!data.segments) {
+    const text = data.text ?? "";
+    return (
+      <div>
+        <p className="text-xs text-gray-500 mb-2">{text.split(/\s+/).length.toLocaleString()} words</p>
+        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 max-h-[32rem] overflow-y-auto">
+          <p className="text-sm text-gray-300 leading-relaxed">{text}</p>
+        </div>
+      </div>
+    );
+  }
+
+  const wordCount = data.segments.reduce((n, s) => n + s.text.split(/\s+/).length, 0);
+  const buckets: { label: string; text: string }[] = [];
+  let currentMinute = -1;
+  let currentParts: string[] = [];
+
+  for (const seg of data.segments) {
+    const minute = Math.floor(seg.start / 60);
+    if (minute !== currentMinute) {
+      if (currentParts.length > 0)
+        buckets.push({ label: fmtTime(currentMinute * 60), text: currentParts.join(" ") });
+      currentMinute = minute;
+      currentParts = [seg.text];
+    } else {
+      currentParts.push(seg.text);
+    }
+  }
+  if (currentParts.length > 0)
+    buckets.push({ label: fmtTime(currentMinute * 60), text: currentParts.join(" ") });
+
+  return (
+    <div>
+      <p className="text-xs text-gray-500 mb-2">{wordCount.toLocaleString()} words</p>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 max-h-[32rem] overflow-y-auto space-y-4">
+        {buckets.map((b) => (
+          <div key={b.label} className="flex gap-3">
+            <span className="text-xs text-violet-500 font-mono mt-0.5 w-10 flex-shrink-0 pt-px">
+              {b.label}
+            </span>
+            <p className="text-sm text-gray-300 leading-relaxed">{b.text}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Page ───────────────────────────────────────────────────────────────────
+
+type Tab = "filters" | "transcript";
+
+export function ItemDetail({ items }: { items: JellyfinItem[] }) {
+  const { itemId } = useParams<{ itemId: string }>();
+  const item = items.find((i) => i.Id === itemId);
+  const [tab, setTab] = useState<Tab>("filters");
+
+  const { data: edl } = useQuery({
+    queryKey: ["edl", itemId],
+    queryFn: () => fetchEdl(itemId!),
+    enabled: !!itemId,
+    retry: false,
+  });
+
+  if (!itemId) return null;
+  const imageTag = item?.ImageTags?.Primary;
+  const activeCount = edl?.entries.filter((e) => e.type === "mute" && !e.suppressed).length;
+  const totalCount = edl?.entries.filter((e) => e.type === "mute").length;
+
+  return (
+    <div>
+      <Link to="/library" className="text-sm text-gray-400 hover:text-white mb-4 inline-flex items-center gap-1">
+        ← Library
+      </Link>
+
+      <div className="flex gap-4 mt-3 mb-6">
+        {imageTag && (
+          <img src={getImageUrl(itemId, imageTag)} alt={item?.Name}
+            className="w-20 rounded-lg object-cover flex-shrink-0" />
+        )}
+        <div>
+          <h1 className="text-xl font-semibold text-white">{item?.Name ?? itemId}</h1>
+          {item?.SeriesName && <p className="text-gray-400 text-sm">{item.SeriesName}</p>}
+          {item?.ProductionYear && <p className="text-gray-500 text-sm">{item.ProductionYear}</p>}
+          {totalCount != null && (
+            <p className="text-sm text-gray-400 mt-1">
+              {activeCount}/{totalCount} filters active
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-1 mb-4 border-b border-gray-800">
+        {(["filters", "transcript"] as Tab[]).map((t) => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`px-4 py-2 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+              tab === t ? "border-violet-500 text-white" : "border-transparent text-gray-400 hover:text-gray-200"
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab === "filters" && <WordFilterView itemId={itemId} />}
+      {tab === "transcript" && <TranscriptView itemId={itemId} />}
+    </div>
+  );
+}
