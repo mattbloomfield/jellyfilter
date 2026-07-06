@@ -67,17 +67,28 @@ function ItemCard({ item, status }: { item: JellyfinItem; status: FilterStatus }
 export function Library({ items }: { items: JellyfinItem[] }) {
   const [filter, setFilter] = useState<ActiveFilter>("all");
 
-  const { data: pipeline } = useQuery({
+  const { data: pipeline, isLoading: pipelineLoading } = useQuery({
     queryKey: ["pipeline"],
     queryFn: fetchPipeline,
   });
 
   const scanPaths = pipeline?.media_paths ?? [];
-  const scopedItems = scanPaths.length === 0
+
+  // Wait for pipeline to load before filtering so we don't flash all items
+  // then immediately hide most of them.
+  const scopedItems = pipelineLoading
+    ? []
+    : scanPaths.length === 0
     ? items
-    : items.filter((item) =>
-        item.Path != null && scanPaths.some((p) => item.Path!.startsWith(p))
-      );
+    : items.filter((item) => {
+        if (!item.Path) return false;
+        // Normalize: strip trailing slash so both "/foo" and "/foo/" work as prefixes,
+        // then require a "/" boundary so "/mnt/Movies" doesn't match "/mnt/MoviesExtra".
+        return scanPaths.some((p) => {
+          const prefix = p.replace(/\/$/, "");
+          return item.Path === prefix || item.Path!.startsWith(prefix + "/");
+        });
+      });
 
   const statusQueries = useQueries({
     queries: scopedItems.map((item) => ({
@@ -128,9 +139,26 @@ export function Library({ items }: { items: JellyfinItem[] }) {
         </div>
       </div>
 
-      {scopedItems.length === 0 && items.length === 0 && <p className="text-gray-400">Loading library…</p>}
-      {scopedItems.length === 0 && items.length > 0 && (
-        <p className="text-gray-500 text-sm">No items found in the configured scan paths.</p>
+      {scanPaths.length > 0 && (
+        <p className="text-xs text-gray-600 mb-3">
+          Showing items under:{" "}
+          {scanPaths.map((p, i) => (
+            <span key={p}>
+              <span className="font-mono text-gray-500">{p}</span>
+              {i < scanPaths.length - 1 ? ", " : ""}
+            </span>
+          ))}
+          {" · "}
+          <span className="text-gray-500">{scopedItems.length} of {items.length} items</span>
+        </p>
+      )}
+
+      {pipelineLoading && <p className="text-gray-500 text-sm">Loading…</p>}
+      {!pipelineLoading && scopedItems.length === 0 && items.length === 0 && <p className="text-gray-400">Loading library…</p>}
+      {!pipelineLoading && scopedItems.length === 0 && items.length > 0 && (
+        <p className="text-gray-500 text-sm">
+          No items match the configured scan paths. Check Preferences → Scan Paths and make sure they match the absolute paths Jellyfin uses (e.g. <span className="font-mono">/mnt/media/Movies</span>).
+        </p>
       )}
       {visibleItems.length === 0 && items.length > 0 && (
         <p className="text-gray-500 text-sm">No items match this filter.</p>
