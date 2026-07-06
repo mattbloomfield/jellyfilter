@@ -6,7 +6,7 @@ Runs on port 8765.
 """
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 import logging
@@ -365,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def start_api_server(port: int = 8765):
-    server = HTTPServer(("0.0.0.0", port), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     log.info("JellyFilter API server listening on port %d", port)
