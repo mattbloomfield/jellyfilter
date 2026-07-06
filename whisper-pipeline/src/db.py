@@ -81,6 +81,24 @@ def enqueue(media_path: str) -> bool:
         return True
 
 
+def enqueue_batch(paths: list[str]) -> int:
+    """Enqueue multiple files in a single transaction. Returns number newly added."""
+    if not paths:
+        return 0
+    with get_conn() as conn:
+        existing = {
+            row[0] for row in conn.execute("SELECT media_path FROM queue").fetchall()
+        }
+        now = time.time()
+        new_paths = [(p, now) for p in paths if p not in existing]
+        if new_paths:
+            conn.executemany(
+                "INSERT INTO queue (media_path, status, added_at) VALUES (?, 'new', ?)",
+                new_paths,
+            )
+        return len(new_paths)
+
+
 def pop_next() -> Optional[sqlite3.Row]:
     """Claim and return the next 'new' item, marking it 'processing'. Thread-safe."""
     with _pop_lock:

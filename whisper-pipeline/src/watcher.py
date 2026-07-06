@@ -34,13 +34,19 @@ class MediaHandler(FileSystemEventHandler):
 
 def scan_existing(media_paths: list[str]):
     """Enqueue all existing media files not yet in the database."""
-    count = 0
+    log.info("Starting background scan of %d path(s)…", len(media_paths))
+    found = []
     for root in media_paths:
-        for p in Path(root).rglob("*"):
-            if p.is_file() and p.suffix.lower() in MEDIA_EXTENSIONS:
-                if db.enqueue(str(p)):
-                    count += 1
-    log.info("Initial scan: queued %d files", count)
+        try:
+            for p in Path(root).rglob("*"):
+                # Check suffix first (no I/O) before calling is_file() over NFS
+                if p.suffix.lower() in MEDIA_EXTENSIONS and p.is_file():
+                    found.append(str(p))
+        except Exception:
+            log.exception("Error scanning %s", root)
+
+    added = db.enqueue_batch(found)
+    log.info("Initial scan complete: %d files found, %d newly queued", len(found), added)
 
 
 def start_watcher(media_paths: list[str]) -> Observer:

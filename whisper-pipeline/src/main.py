@@ -149,7 +149,8 @@ def main():
     else:
         media_paths = cfg.get("media_paths", [])
 
-    scan_existing(media_paths)
+    # Run scan in background so workers start immediately rather than waiting
+    threading.Thread(target=scan_existing, args=(media_paths,), daemon=True).start()
     observer = start_watcher(media_paths)
 
     max_workers = cfg.get("max_workers", 1)
