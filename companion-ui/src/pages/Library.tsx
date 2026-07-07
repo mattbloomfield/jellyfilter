@@ -51,9 +51,9 @@ function ExcludeButton({ item, status }: { item: JellyfinItem; status: FilterSta
         onClick={(e) => { e.preventDefault(); unexcludeMutation.mutate(); }}
         disabled={unexcludeMutation.isPending}
         title="Re-enable processing"
-        className="text-xs text-gray-600 hover:text-gray-400 transition-colors disabled:opacity-50"
+        className="text-xs text-violet-600 hover:text-violet-400 transition-colors disabled:opacity-50"
       >
-        Unexclude
+        ↩ Include
       </button>
     );
   }
@@ -61,11 +61,11 @@ function ExcludeButton({ item, status }: { item: JellyfinItem; status: FilterSta
   return (
     <button
       onClick={(e) => { e.preventDefault(); excludeMutation.mutate(); }}
-      disabled={excludeMutation.isPending || status === "pending"}
-      title="Skip processing for this item"
-      className="text-xs text-gray-700 hover:text-gray-500 transition-colors disabled:opacity-30"
+      disabled={excludeMutation.isPending}
+      title="Skip processing — won't be transcribed"
+      className="text-xs text-gray-500 hover:text-red-400 transition-colors disabled:opacity-30"
     >
-      Exclude
+      ⊘ Exclude
     </button>
   );
 }
