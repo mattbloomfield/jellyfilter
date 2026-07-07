@@ -87,9 +87,29 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(200, {"status": "no-data", "hit_count": None})
 
-        elif path.startswith("/jellyfilter/edl/") and "/entry/" not in path:
+        elif path.startswith("/jellyfilter/edl/") and "/entry/" not in path and "/category/" not in path:
             item_id = path.split("/")[-1]
-            edl_path = Path("/mnt/nfs-media/jellyfilter/edl") / f"{item_id}.jellyfilter.json"
+            edl_dir = Path("/mnt/nfs-media/jellyfilter/edl")
+            edl_path = edl_dir / f"{item_id}.jellyfilter.json"
+
+            # Fallback: EDL may have been written with a hash ID before Jellyfin URL was configured.
+            # Find it by media_path from the queue, then rename it to the correct ID.
+            if not edl_path.exists():
+                queue_row = db.get_status_by_jellyfin_id(item_id)
+                if queue_row:
+                    media_path = queue_row.get("media_path", "")
+                    for f in edl_dir.glob("*.jellyfilter.json"):
+                        try:
+                            doc = json.loads(f.read_text())
+                            if doc.get("media_path") == media_path:
+                                doc["media_id"] = item_id
+                                edl_path.write_text(json.dumps(doc, indent=2))
+                                f.unlink()
+                                log.info("Migrated EDL %s → %s", f.name, edl_path.name)
+                                break
+                        except Exception:
+                            pass
+
             if edl_path.exists():
                 self._send(200, json.loads(edl_path.read_text()))
             else:

@@ -218,6 +218,14 @@ def get_avg_processing_seconds() -> Optional[float]:
         return row["avg_secs"] if row and row["avg_secs"] else None
 
 
+def get_status_by_jellyfin_id(jellyfin_id: str) -> Optional[dict]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM queue WHERE jellyfin_id = ?", (jellyfin_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def get_status(media_path: str) -> Optional[dict]:
     with get_conn() as conn:
         row = conn.execute(
