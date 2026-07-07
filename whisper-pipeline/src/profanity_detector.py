@@ -2,16 +2,14 @@ import re
 from dataclasses import dataclass
 from typing import List
 
-# Primary profanity-check model (ML-based, fast)
 try:
     from profanity_check import predict_prob
     _MODEL_AVAILABLE = True
 except ImportError:
     _MODEL_AVAILABLE = False
 
-# Strong profanity that must always be muted.
-# "hell" and "damn" are intentionally excluded.
-_STRONG_WORDS: list[re.Pattern] = [
+_WORD_PATTERNS: list[re.Pattern] = [
+    # Strong
     re.compile(r'\bf+u+c+k+\w*', re.IGNORECASE),
     re.compile(r'\bsh+i+t+\w*', re.IGNORECASE),
     re.compile(r'\bb+i+t+c+h+\w*', re.IGNORECASE),
@@ -26,10 +24,13 @@ _STRONG_WORDS: list[re.Pattern] = [
     re.compile(r'\bwhore\w*', re.IGNORECASE),
     re.compile(r'\bslut\w*', re.IGNORECASE),
     re.compile(r'\bn[i!1]+gg[aeiouh]\w*', re.IGNORECASE),  # racial slur — requires double-g
+    # Mild
+    re.compile(r'\bass(es)?\b', re.IGNORECASE),   # ass/asses — not asshole (caught above) or assist/bass
+    re.compile(r'\bdamn\w*', re.IGNORECASE),       # damn, damned, dammit
+    re.compile(r'\bhell\b', re.IGNORECASE),         # hell — not hello or shell
+    re.compile(r'\bcrap\w*', re.IGNORECASE),        # crap, crappy
+    re.compile(r'\bheck\b', re.IGNORECASE),
 ]
-
-# Words that are fine — never flag these even if the ML model would
-_ALLOWLIST: set[str] = {"hell", "damn", "damned", "heck", "crap", "ass"}
 
 
 @dataclass
@@ -40,13 +41,8 @@ class DetectedWord:
     confidence: float
 
 
-def _is_allowed(word: str) -> bool:
-    clean = re.sub(r"[^a-z]", "", word.lower())
-    return clean in _ALLOWLIST
-
-
-def _matches_strong_list(word: str) -> bool:
-    return any(p.search(word) for p in _STRONG_WORDS)
+def _matches_word_list(word: str) -> bool:
+    return any(p.search(word) for p in _WORD_PATTERNS)
 
 
 def detect_profanity(word_tokens: list[dict]) -> List[DetectedWord]:
@@ -63,10 +59,7 @@ def detect_profanity(word_tokens: list[dict]) -> List[DetectedWord]:
         if not clean:
             continue
 
-        if _is_allowed(clean):
-            continue
-
-        if _matches_strong_list(clean):
+        if _matches_word_list(clean):
             results.append(DetectedWord(
                 word=clean.lower(),
                 start=token["start"],
