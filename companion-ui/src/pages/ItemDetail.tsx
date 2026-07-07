@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, addEntry, type EdlEntry, type NewEntryInput } from "../api/jellyfilter";
+import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, addEntry, deleteEntry, type EdlEntry, type NewEntryInput } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -104,10 +104,11 @@ interface WordGroupProps {
   word: string;
   entries: EdlEntry[];
   onToggle: (word: string, suppressed: boolean) => void;
+  onDelete: (entryId: string) => void;
   pending: boolean;
 }
 
-function WordGroup({ word, entries, onToggle, pending }: WordGroupProps) {
+function WordGroup({ word, entries, onToggle, onDelete, pending }: WordGroupProps) {
   const [expanded, setExpanded] = useState(false);
   const allSuppressed = entries.every((e) => e.suppressed);
   const active = !allSuppressed;
@@ -141,14 +142,21 @@ function WordGroup({ word, entries, onToggle, pending }: WordGroupProps) {
       {expanded && (
         <div className="border-t border-gray-800 divide-y divide-gray-900 bg-gray-950">
           {entries.map((e) => (
-            <div key={e.id} className="flex items-center px-6 py-2">
+            <div key={e.id} className="flex items-center px-6 py-2 gap-2">
               <span className="text-xs font-mono text-violet-400 w-14 flex-shrink-0">
                 {fmtTime(e.start)}
               </span>
               <span className={`text-xs flex-1 ${e.suppressed ? "text-gray-600 line-through" : "text-gray-400"}`}>
                 {censor(word)}
               </span>
-
+              <button
+                onClick={() => onDelete(e.id)}
+                disabled={pending}
+                title="Delete — removes from EDL and transcript so redetect won't re-add it"
+                className="text-gray-700 hover:text-red-500 disabled:opacity-30 transition-colors text-sm leading-none"
+              >
+                ×
+              </button>
             </div>
           ))}
         </div>
@@ -162,10 +170,11 @@ interface SceneGroupProps {
   entries: EdlEntry[];
   onToggleAll: (suppressed: boolean) => void;
   onToggleEntry: (entry: EdlEntry, suppressed: boolean) => void;
+  onDelete: (entryId: string) => void;
   pending: boolean;
 }
 
-function SceneGroup({ category, entries, onToggleAll, onToggleEntry, pending }: SceneGroupProps) {
+function SceneGroup({ category, entries, onToggleAll, onToggleEntry, onDelete, pending }: SceneGroupProps) {
   const [expanded, setExpanded] = useState(false);
   const allSuppressed = entries.every((e) => e.suppressed);
   const active = !allSuppressed;
@@ -213,6 +222,14 @@ function SceneGroup({ category, entries, onToggleAll, onToggleEntry, pending }: 
                 className="disabled:opacity-50"
               >
                 <ToggleCircle active={!e.suppressed} />
+              </button>
+              <button
+                onClick={() => onDelete(e.id)}
+                disabled={pending}
+                title="Delete false positive"
+                className="text-gray-700 hover:text-red-500 disabled:opacity-30 transition-colors text-sm leading-none"
+              >
+                ×
               </button>
             </div>
           ))}
@@ -355,6 +372,20 @@ function WordFilterView({ itemId }: { itemId: string }) {
     onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(["edl", itemId], ctx.prev); },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (entryId: string) => deleteEntry(itemId, entryId),
+    onMutate: async (entryId) => {
+      await qc.cancelQueries({ queryKey: ["edl", itemId] });
+      const prev = qc.getQueryData(["edl", itemId]);
+      qc.setQueryData(["edl", itemId], (old: typeof edl) => {
+        if (!old) return old;
+        return { ...old, entries: old.entries.filter((e) => e.id !== entryId) };
+      });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => { if (ctx?.prev) qc.setQueryData(["edl", itemId], ctx.prev); },
+  });
+
   const categoryMutation = useMutation({
     mutationFn: ({ category, suppressed }: { category: string; suppressed: boolean }) =>
       toggleCategory(itemId, category, suppressed),
@@ -394,7 +425,7 @@ function WordFilterView({ itemId }: { itemId: string }) {
   }
   const sortedCategories = [...sceneGroups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
-  const pending = wordMutation.isPending || entryMutation.isPending || categoryMutation.isPending;
+  const pending = wordMutation.isPending || entryMutation.isPending || categoryMutation.isPending || deleteMutation.isPending;
 
   return (
     <div>
@@ -406,6 +437,7 @@ function WordFilterView({ itemId }: { itemId: string }) {
             word={word}
             entries={entries}
             onToggle={(w, suppressed) => wordMutation.mutate({ word: w, suppressed })}
+            onDelete={(id) => deleteMutation.mutate(id)}
             pending={pending}
           />
         ))}
@@ -416,6 +448,7 @@ function WordFilterView({ itemId }: { itemId: string }) {
             entries={entries}
             onToggleAll={(suppressed) => categoryMutation.mutate({ category, suppressed })}
             onToggleEntry={(entry, suppressed) => entryMutation.mutate({ entry, suppressed })}
+            onDelete={(id) => deleteMutation.mutate(id)}
             pending={pending}
           />
         ))}

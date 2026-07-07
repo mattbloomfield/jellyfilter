@@ -5,6 +5,7 @@ works without the C# plugin installed.
 Runs on port 8765.
 """
 import json
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -392,12 +393,48 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "not found"})
                 return
             doc = json.loads(edl_path.read_text())
-            before = len(doc["entries"])
-            doc["entries"] = [e for e in doc["entries"] if e["id"] != entry_id]
-            if len(doc["entries"]) == before:
+
+            # Find the entry before removing it so we can clean up the transcript token
+            removed = next((e for e in doc["entries"] if e["id"] == entry_id), None)
+            if not removed:
                 self._send(404, {"error": "entry not found"})
                 return
+
+            doc["entries"] = [e for e in doc["entries"] if e["id"] != entry_id]
             edl_path.write_text(json.dumps(doc, indent=2))
+
+            # Remove the matching word token from the stored transcript so redetect
+            # won't re-add this hallucinated word.
+            word = removed.get("word")
+            media_path = doc.get("media_path", "")
+            if word and media_path:
+                try:
+                    with db.get_conn() as conn:
+                        row = conn.execute(
+                            "SELECT word_tokens FROM transcripts WHERE media_path = ?",
+                            (media_path,)
+                        ).fetchone()
+                    if row and row["word_tokens"]:
+                        tokens = json.loads(row["word_tokens"])
+                        entry_start = removed.get("start", 0)
+                        entry_end = removed.get("end", 0)
+                        cleaned = [
+                            t for t in tokens
+                            if not (
+                                re.sub(r"[^a-zA-Z']", "", t["word"]).lower() == word
+                                and entry_start <= t["start"] + 0.2 <= entry_end
+                            )
+                        ]
+                        if len(cleaned) < len(tokens):
+                            with db.get_conn() as conn:
+                                conn.execute(
+                                    "UPDATE transcripts SET word_tokens = ? WHERE media_path = ?",
+                                    (json.dumps(cleaned), media_path)
+                                )
+                            log.info("Removed word token '%s' from transcript for %s", word, media_path)
+                except Exception:
+                    log.exception("Could not clean word token for %s", entry_id)
+
             self.send_response(204)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()

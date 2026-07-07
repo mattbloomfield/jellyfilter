@@ -108,6 +108,14 @@ export const toggleWord = (itemId: string, word: string, suppressed: boolean) =>
 export const suppressEntry = (itemId: string, entry: EdlEntry, suppressed: boolean) =>
   req<EdlEntry>("PUT", `/edl/${itemId}/entry/${entry.id}`, { ...entry, suppressed });
 
+export const deleteEntry = async (itemId: string, entryId: string): Promise<void> => {
+  const res = await fetch(`${getBase()}/jellyfilter/edl/${itemId}/entry/${entryId}`, {
+    method: "DELETE",
+    headers: { "X-Emby-Token": localStorage.getItem("jellyfilter:api_key") ?? "" },
+  });
+  if (!res.ok && res.status !== 204) throw new Error(`deleteEntry: ${res.status}`);
+};
+
 export const toggleCategory = (itemId: string, category: string, suppressed: boolean) =>
   req<{ category: string; suppressed: boolean; updated: number }>(
     "PUT", `/edl/${itemId}/category/${encodeURIComponent(category)}`, { suppressed }
