@@ -27,20 +27,30 @@ class JellyfinClient:
             return None
 
     def resolve_item_id(self, media_path: str) -> Optional[str]:
-        """Look up a Jellyfin item ID by its file path."""
-        # Jellyfin exposes the path as a filter on /Items
-        data = self._get(
-            "/Items",
-            Recursive=True,
-            Fields="Path",
-            Path=media_path,
-            Limit=1,
-        )
-        if not data:
-            return None
-        items = data.get("Items", []) if isinstance(data, dict) else data
-        if items:
-            return items[0].get("Id")
+        """Look up a Jellyfin item ID by its exact file path."""
+        # Fetch all video items with their paths and match exactly.
+        # The /Items?Path= filter is a folder prefix, not a file match,
+        # so we fetch in pages and do the comparison ourselves.
+        start = 0
+        page_size = 500
+        while True:
+            data = self._get(
+                "/Items",
+                Recursive="true",
+                IncludeItemTypes="Movie,Episode",
+                Fields="Path",
+                StartIndex=str(start),
+                Limit=str(page_size),
+            )
+            if not data:
+                break
+            items = data.get("Items", []) if isinstance(data, dict) else []
+            for item in items:
+                if item.get("Path") == media_path:
+                    return item.get("Id")
+            if len(items) < page_size:
+                break
+            start += page_size
         return None
 
     def get_duration(self, item_id: str) -> Optional[float]:
