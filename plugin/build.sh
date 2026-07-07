@@ -6,8 +6,8 @@
 set -euo pipefail
 
 # ── Configure these for your environment ────────────────────────────────────
-PROXMOX_HOST="your-proxmox-host"   # SSH hostname for your Proxmox node
-JELLYFIN_CT="205"                   # LXC container ID running Jellyfin
+PROXMOX_HOST="${PROXMOX_HOST:-your-proxmox-host}"   # SSH hostname for your Proxmox node
+JELLYFIN_CT="${JELLYFIN_CT:-205}"                   # LXC container ID running Jellyfin
 # ────────────────────────────────────────────────────────────────────────────
 
 PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)/JellyFilter"

@@ -10,9 +10,9 @@
 set -euo pipefail
 
 # ── Configure these for your environment ────────────────────────────────────
-PROXMOX_HOST="your-proxmox-host"   # SSH hostname for your Proxmox node
-DOCKER_CT="207"                     # LXC container ID running Docker
-JELLYFIN_CT="205"                   # LXC container ID running Jellyfin
+PROXMOX_HOST="${PROXMOX_HOST:-your-proxmox-host}"   # SSH hostname for your Proxmox node
+DOCKER_CT="${DOCKER_CT:-207}"                       # LXC container ID running Docker
+JELLYFIN_CT="${JELLYFIN_CT:-205}"                   # LXC container ID running Jellyfin
 REAL_FFMPEG="/usr/lib/jellyfin-ffmpeg/ffmpeg"
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -40,7 +40,7 @@ PROXMOX
 
 echo ""
 echo "=== Step 3: Set up EDL directory on shared storage (from CT $DOCKER_CT) ==="
-ssh "$PROXMOX_HOST" "pct exec $DOCKER_CT -- bash -c 'mkdir -p /mnt/nfs-media/jellyfilter/edl && chmod -R 777 /mnt/nfs-media/jellyfilter'"
+ssh "$PROXMOX_HOST" "pct exec $DOCKER_CT -- bash -c 'mkdir -p /mnt/nfs-media/jellyfilter/edl; chmod -R 777 /mnt/nfs-media/jellyfilter 2>/dev/null || true'"
 
 echo ""
 echo "=== Step 4: Append jellyfilter services to docker-compose in CT $DOCKER_CT ==="

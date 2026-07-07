@@ -126,6 +126,12 @@ export const addEntry = (itemId: string, entry: NewEntryInput) =>
 export const retryQueueItem = (queueId: number) =>
   req<{ queued: boolean }>("POST", `/queue/${queueId}/retry`, {});
 
+export const excludeItem = (jellyfinId: string, path: string) =>
+  req<{ excluded: boolean }>("POST", "/exclude", { jellyfin_id: jellyfinId, path });
+
+export const unexcludeItem = (path: string) =>
+  req<{ unexcluded: boolean }>("POST", "/unexclude", { path });
+
 export interface PipelineSettings {
   media_paths: string[];
 }

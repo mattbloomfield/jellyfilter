@@ -324,6 +324,27 @@ class Handler(BaseHTTPRequestHandler):
             edl_path.write_text(json.dumps(doc, indent=2))
             self._send(201, entry)
 
+        elif path == "/jellyfilter/exclude":
+            # POST /jellyfilter/exclude  {"jellyfin_id": "...", "path": "..."}
+            body = self._body()
+            jellyfin_id = body.get("jellyfin_id", "")
+            media_path = body.get("path", "")
+            if not jellyfin_id or not media_path:
+                self._send(400, {"error": "jellyfin_id and path required"})
+                return
+            db.exclude_item(media_path, jellyfin_id)
+            self._send(200, {"excluded": True, "jellyfin_id": jellyfin_id})
+
+        elif path == "/jellyfilter/unexclude":
+            # POST /jellyfilter/unexclude  {"path": "..."}
+            body = self._body()
+            media_path = body.get("path", "")
+            if not media_path:
+                self._send(400, {"error": "path required"})
+                return
+            ok = db.unexclude_item(media_path)
+            self._send(200, {"unexcluded": ok})
+
         elif path.startswith("/jellyfilter/queue/") and path.endswith("/retry"):
             # POST /jellyfilter/queue/{id}/retry  — reset a failed item to 'new'
             parts = path.split("/")

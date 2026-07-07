@@ -143,6 +143,35 @@ def retry_item(media_path: str) -> bool:
         return result.rowcount > 0
 
 
+def exclude_item(media_path: str, jellyfin_id: str) -> None:
+    """Mark an item as excluded so it is never processed."""
+    with get_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM queue WHERE media_path = ?", (media_path,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE queue SET status='excluded', jellyfin_id=? WHERE media_path=?",
+                (jellyfin_id, media_path),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO queue (media_path, jellyfin_id, status, added_at) VALUES (?, ?, 'excluded', ?)",
+                (media_path, jellyfin_id, time.time()),
+            )
+
+
+def unexclude_item(media_path: str) -> bool:
+    """Reset an excluded item back to 'new' so it will be processed."""
+    with get_conn() as conn:
+        result = conn.execute(
+            "UPDATE queue SET status='new', started_at=NULL, finished_at=NULL, error_message=NULL "
+            "WHERE media_path=? AND status='excluded'",
+            (media_path,),
+        )
+        return result.rowcount > 0
+
+
 def retry_by_id(queue_id: int) -> bool:
     """Reset a failed item by queue row id."""
     with get_conn() as conn:

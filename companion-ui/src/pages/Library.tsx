@@ -1,23 +1,25 @@
 import { useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { fetchItemStatus, fetchPipeline } from "../api/jellyfilter";
+import { fetchItemStatus, fetchPipeline, excludeItem, unexcludeItem } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
-type FilterStatus = "filtered" | "pending" | "no-data";
+type FilterStatus = "processed" | "pending" | "no-data" | "excluded";
 type ActiveFilter = "all" | FilterStatus;
 
 const FILTER_LABELS: Record<ActiveFilter, string> = {
   all: "All",
-  filtered: "Filtered",
+  processed: "Processed",
   pending: "Pending",
   "no-data": "No Data",
+  excluded: "Excluded",
 };
 
 const BADGE_STYLES: Record<FilterStatus, string> = {
-  filtered: "bg-green-900 text-green-300",
+  processed: "bg-green-900 text-green-300",
   pending: "bg-yellow-900 text-yellow-300",
   "no-data": "bg-gray-800 text-gray-400",
+  excluded: "bg-gray-800 text-gray-600",
 };
 
 function StatusBadge({ status }: { status: FilterStatus }) {
@@ -28,19 +30,60 @@ function StatusBadge({ status }: { status: FilterStatus }) {
   );
 }
 
+function ExcludeButton({ item, status }: { item: JellyfinItem; status: FilterStatus }) {
+  const qc = useQueryClient();
+
+  const excludeMutation = useMutation({
+    mutationFn: () => excludeItem(item.Id, item.Path ?? ""),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+  });
+
+  const unexcludeMutation = useMutation({
+    mutationFn: () => unexcludeItem(item.Path ?? ""),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+  });
+
+  if (!item.Path) return null;
+
+  if (status === "excluded") {
+    return (
+      <button
+        onClick={(e) => { e.preventDefault(); unexcludeMutation.mutate(); }}
+        disabled={unexcludeMutation.isPending}
+        title="Re-enable processing"
+        className="text-xs text-gray-600 hover:text-gray-400 transition-colors disabled:opacity-50"
+      >
+        Unexclude
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={(e) => { e.preventDefault(); excludeMutation.mutate(); }}
+      disabled={excludeMutation.isPending || status === "pending"}
+      title="Skip processing for this item"
+      className="text-xs text-gray-700 hover:text-gray-500 transition-colors disabled:opacity-30"
+    >
+      Exclude
+    </button>
+  );
+}
+
 function ItemCard({ item, status }: { item: JellyfinItem; status: FilterStatus }) {
   const imageTag = item.ImageTags?.Primary;
 
   return (
     <Link to={`/library/${item.Id}`} className="block group">
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden group-hover:border-gray-600 transition-colors">
+      <div className={`bg-gray-900 border rounded-lg overflow-hidden transition-colors ${
+        status === "excluded"
+          ? "border-gray-800 opacity-40 group-hover:opacity-70"
+          : "border-gray-800 group-hover:border-gray-600"
+      }`}>
         <div className="aspect-[2/3] bg-gray-800 relative">
           {imageTag ? (
-            <img
-              src={getImageUrl(item.Id, imageTag)}
-              alt={item.Name}
-              className="w-full h-full object-cover"
-            />
+            <img src={getImageUrl(item.Id, imageTag)} alt={item.Name}
+              className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-gray-600 text-xs">
               No Image
@@ -58,6 +101,9 @@ function ItemCard({ item, status }: { item: JellyfinItem; status: FilterStatus }
           {item.ProductionYear && (
             <p className="text-xs text-gray-500">{item.ProductionYear}</p>
           )}
+          <div className="mt-1">
+            <ExcludeButton item={item} status={status} />
+          </div>
         </div>
       </div>
     </Link>
@@ -73,17 +119,12 @@ export function Library({ items }: { items: JellyfinItem[] }) {
   });
 
   const scanPaths = pipeline?.media_paths ?? [];
-
-  // Wait for pipeline to load before filtering so we don't flash all items
-  // then immediately hide most of them.
   const scopedItems = pipelineLoading
     ? []
     : scanPaths.length === 0
     ? items
     : items.filter((item) => {
         if (!item.Path) return false;
-        // Normalize: strip trailing slash so both "/foo" and "/foo/" work as prefixes,
-        // then require a "/" boundary so "/mnt/Movies" doesn't match "/mnt/MoviesExtra".
         return scanPaths.some((p) => {
           const prefix = p.replace(/\/$/, "");
           return item.Path === prefix || item.Path!.startsWith(prefix + "/");
@@ -101,14 +142,16 @@ export function Library({ items }: { items: JellyfinItem[] }) {
   const statusMap = new Map<string, FilterStatus>(
     scopedItems.map((item, i) => {
       const data = statusQueries[i].data;
-      const status: FilterStatus = data?.status === "done" ? "filtered"
-        : data ? "pending"
-        : "no-data";
+      const status: FilterStatus =
+        data?.status === "done" ? "processed" :
+        data?.status === "excluded" ? "excluded" :
+        data?.status === "new" || data?.status === "processing" ? "pending" :
+        "no-data";
       return [item.Id, status];
     })
   );
 
-  const counts: Record<FilterStatus, number> = { filtered: 0, pending: 0, "no-data": 0 };
+  const counts: Record<FilterStatus, number> = { processed: 0, pending: 0, "no-data": 0, excluded: 0 };
   for (const s of statusMap.values()) counts[s]++;
 
   const visibleItems = filter === "all"
@@ -120,7 +163,7 @@ export function Library({ items }: { items: JellyfinItem[] }) {
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <h1 className="text-lg font-semibold mr-auto">Library</h1>
         <div className="flex gap-1">
-          {(["all", "filtered", "pending", "no-data"] as const).map((f) => (
+          {(["all", "processed", "pending", "no-data", "excluded"] as const).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -131,9 +174,7 @@ export function Library({ items }: { items: JellyfinItem[] }) {
               }`}
             >
               {FILTER_LABELS[f]}
-              {f !== "all" && (
-                <span className="ml-1.5 opacity-60">{counts[f]}</span>
-              )}
+              {f !== "all" && <span className="ml-1.5 opacity-60">{counts[f]}</span>}
             </button>
           ))}
         </div>
@@ -154,13 +195,17 @@ export function Library({ items }: { items: JellyfinItem[] }) {
       )}
 
       {pipelineLoading && <p className="text-gray-500 text-sm">Loading…</p>}
-      {!pipelineLoading && scopedItems.length === 0 && items.length === 0 && <p className="text-gray-400">Loading library…</p>}
+      {!pipelineLoading && scopedItems.length === 0 && items.length === 0 && (
+        <p className="text-gray-400">Loading library…</p>
+      )}
       {!pipelineLoading && scopedItems.length === 0 && items.length > 0 && (
         <p className="text-gray-500 text-sm">
-          No items match the configured scan paths. Check Preferences → Scan Paths and make sure they match the absolute paths Jellyfin uses (e.g. <span className="font-mono">/mnt/media/Movies</span>).
+          No items match the configured scan paths. Check Preferences → Scan Paths and make sure
+          they match the absolute paths Jellyfin uses (e.g.{" "}
+          <span className="font-mono">/mnt/media/Movies</span>).
         </p>
       )}
-      {visibleItems.length === 0 && items.length > 0 && (
+      {visibleItems.length === 0 && scopedItems.length > 0 && (
         <p className="text-gray-500 text-sm">No items match this filter.</p>
       )}
 
