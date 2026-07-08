@@ -35,12 +35,30 @@ function ExcludeButton({ item, status }: { item: JellyfinItem; status: FilterSta
 
   const excludeMutation = useMutation({
     mutationFn: () => excludeItem(item.Id, item.Path ?? ""),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ["item-status", item.Id] });
+      const prev = qc.getQueryData(["item-status", item.Id]);
+      qc.setQueryData(["item-status", item.Id], { status: "excluded", hit_count: null });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["item-status", item.Id], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
   });
 
   const unexcludeMutation = useMutation({
     mutationFn: () => unexcludeItem(item.Path ?? ""),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: ["item-status", item.Id] });
+      const prev = qc.getQueryData(["item-status", item.Id]);
+      qc.setQueryData(["item-status", item.Id], { status: "no-data", hit_count: null });
+      return { prev };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["item-status", item.Id], ctx.prev);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
   });
 
   if (!item.Path) return null;
