@@ -195,6 +195,16 @@ def save_transcript(media_path: str, segments_json: str, word_tokens_json: str):
         )
 
 
+def get_all_statuses() -> dict:
+    """Return {jellyfin_id: {status, hit_count}} for every queue row with a jellyfin_id.
+    No LIMIT — used by the status-all endpoint."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT jellyfin_id, status, hit_count FROM queue WHERE jellyfin_id IS NOT NULL"
+        ).fetchall()
+    return {r["jellyfin_id"]: {"status": r["status"], "hit_count": r["hit_count"]} for r in rows}
+
+
 def get_all_queue() -> list:
     with get_conn() as conn:
         rows = conn.execute(

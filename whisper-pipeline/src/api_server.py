@@ -200,13 +200,10 @@ class Handler(BaseHTTPRequestHandler):
 
         elif path == "/jellyfilter/status-all":
             # Returns a map of jellyfin_id -> {status, hit_count} for all known items.
-            rows = db.get_all_queue()
-            result = {}
-            for r in rows:
-                jid = r.get("jellyfin_id")
-                if jid:
-                    result[jid] = {"status": r["status"], "hit_count": r.get("hit_count")}
-            # Also include items with EDL files that may not be in the queue lookup
+            # Query directly — don't use get_all_queue() which has LIMIT 500 and
+            # sorts excluded items last, causing them to be dropped as the queue grows.
+            result = db.get_all_statuses()
+            # Also surface items with EDL files not in the queue
             edl_dir = Path("/mnt/nfs-media/jellyfilter/edl")
             if edl_dir.exists():
                 for edl_file in edl_dir.glob("*.jellyfilter.json"):
