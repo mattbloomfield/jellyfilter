@@ -198,6 +198,23 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send(500, {"error": str(exc)})
 
+        elif path == "/jellyfilter/status-all":
+            # Returns a map of jellyfin_id -> {status, hit_count} for all known items.
+            rows = db.get_all_queue()
+            result = {}
+            for r in rows:
+                jid = r.get("jellyfin_id")
+                if jid:
+                    result[jid] = {"status": r["status"], "hit_count": r.get("hit_count")}
+            # Also include items with EDL files that may not be in the queue lookup
+            edl_dir = Path("/mnt/nfs-media/jellyfilter/edl")
+            if edl_dir.exists():
+                for edl_file in edl_dir.glob("*.jellyfilter.json"):
+                    item_id = edl_file.stem.replace(".jellyfilter", "")
+                    if item_id not in result:
+                        result[item_id] = {"status": "done", "hit_count": None}
+            self._send(200, result)
+
         elif path == "/jellyfilter/pipeline":
             all_prefs = _load_prefs()
             pipeline = all_prefs.get("_pipeline", {})
@@ -442,8 +459,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
 
+class JellyFilterHTTPServer(ThreadingHTTPServer):
+    request_queue_size = 128  # default is 5 — too small for burst status requests
+
+
 def start_api_server(port: int = 8765):
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    server = JellyFilterHTTPServer(("0.0.0.0", port), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     log.info("JellyFilter API server listening on port %d", port)

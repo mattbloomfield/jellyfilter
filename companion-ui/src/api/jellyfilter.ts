@@ -97,6 +97,9 @@ export const fetchQueue = () => req<QueueResponse>("GET", "/queue");
 export const fetchItemStatus = (itemId: string) =>
   req<{ status: string; hit_count: number | null }>("GET", `/status/${itemId}`);
 
+export const fetchAllStatuses = () =>
+  req<Record<string, { status: string; hit_count: number | null }>>("GET", "/status-all");
+
 export const fetchTranscript = (itemId: string) =>
   req<TranscriptResponse>("GET", `/transcript/${itemId}`);
 

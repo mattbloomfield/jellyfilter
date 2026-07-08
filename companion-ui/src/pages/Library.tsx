@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { fetchItemStatus, fetchPipeline, excludeItem, unexcludeItem } from "../api/jellyfilter";
+import { fetchAllStatuses, fetchPipeline, excludeItem, unexcludeItem } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
 type FilterStatus = "processed" | "pending" | "no-data" | "excluded";
@@ -36,29 +36,33 @@ function ExcludeButton({ item, status }: { item: JellyfinItem; status: FilterSta
   const excludeMutation = useMutation({
     mutationFn: () => excludeItem(item.Id, item.Path ?? ""),
     onMutate: async () => {
-      await qc.cancelQueries({ queryKey: ["item-status", item.Id] });
-      const prev = qc.getQueryData(["item-status", item.Id]);
-      qc.setQueryData(["item-status", item.Id], { status: "excluded", hit_count: null });
+      await qc.cancelQueries({ queryKey: ["status-all"] });
+      const prev = qc.getQueryData(["status-all"]);
+      qc.setQueryData(["status-all"], (old: Record<string, unknown> | undefined) => ({
+        ...old, [item.Id]: { status: "excluded", hit_count: null },
+      }));
       return { prev };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(["item-status", item.Id], ctx.prev);
+      if (ctx?.prev) qc.setQueryData(["status-all"], ctx.prev);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["status-all"] }),
   });
 
   const unexcludeMutation = useMutation({
     mutationFn: () => unexcludeItem(item.Path ?? ""),
     onMutate: async () => {
-      await qc.cancelQueries({ queryKey: ["item-status", item.Id] });
-      const prev = qc.getQueryData(["item-status", item.Id]);
-      qc.setQueryData(["item-status", item.Id], { status: "no-data", hit_count: null });
+      await qc.cancelQueries({ queryKey: ["status-all"] });
+      const prev = qc.getQueryData(["status-all"]);
+      qc.setQueryData(["status-all"], (old: Record<string, unknown> | undefined) => ({
+        ...old, [item.Id]: { status: "no-data", hit_count: null },
+      }));
       return { prev };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(["item-status", item.Id], ctx.prev);
+      if (ctx?.prev) qc.setQueryData(["status-all"], ctx.prev);
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["item-status", item.Id] }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["status-all"] }),
   });
 
   if (!item.Path) return null;
@@ -149,21 +153,20 @@ export function Library({ items }: { items: JellyfinItem[] }) {
         });
       });
 
-  const statusQueries = useQueries({
-    queries: scopedItems.map((item) => ({
-      queryKey: ["item-status", item.Id],
-      queryFn: () => fetchItemStatus(item.Id),
-      retry: false,
-    })),
+  const { data: allStatuses } = useQuery({
+    queryKey: ["status-all"],
+    queryFn: fetchAllStatuses,
+    refetchInterval: 15_000,
+    retry: false,
   });
 
   const statusMap = new Map<string, FilterStatus>(
-    scopedItems.map((item, i) => {
-      const data = statusQueries[i].data;
+    scopedItems.map((item) => {
+      const s = allStatuses?.[item.Id];
       const status: FilterStatus =
-        data?.status === "done" ? "processed" :
-        data?.status === "excluded" ? "excluded" :
-        data?.status === "new" || data?.status === "processing" ? "pending" :
+        s?.status === "done" ? "processed" :
+        s?.status === "excluded" ? "excluded" :
+        s?.status === "new" || s?.status === "processing" ? "pending" :
         "no-data";
       return [item.Id, status];
     })
