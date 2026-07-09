@@ -82,6 +82,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   "substance-use": "Substance Use",
 };
 
+const NUDENET_LABELS: Record<string, string> = {
+  FEMALE_BREAST_EXPOSED: "Breast",
+  FEMALE_GENITALIA_EXPOSED: "Female nudity",
+  MALE_GENITALIA_EXPOSED: "Male nudity",
+  BUTTOCKS_EXPOSED: "Buttocks",
+  ANUS_EXPOSED: "Explicit",
+};
+
+function formatLabels(labels: string[] | undefined): string {
+  if (!labels?.length) return "";
+  return labels.map((l) => NUDENET_LABELS[l] ?? l.replace(/_/g, " ").toLowerCase()).join(", ");
+}
+
 // ── Word picker ────────────────────────────────────────────────────────────
 
 function ToggleCircle({ active }: { active: boolean }) {
@@ -213,9 +226,17 @@ function SceneGroup({ category, entries, onToggleAll, onToggleEntry, onDelete, p
               <span className="text-xs font-mono text-violet-400 w-14 flex-shrink-0">
                 {fmtTime(e.start)}
               </span>
-              <span className={`text-xs flex-1 ${e.suppressed ? "text-gray-600 line-through" : "text-gray-400"}`}>
+              <span className={`text-xs ${e.suppressed ? "text-gray-600 line-through" : "text-gray-400"}`}>
                 {fmtDuration(e.end - e.start)}
               </span>
+              {e.labels?.length ? (
+                <span className={`text-xs flex-1 ${e.suppressed ? "text-gray-600" : "text-gray-500"}`}>
+                  {formatLabels(e.labels)}
+                  {e.confidence != null && (
+                    <span className="ml-1 opacity-50">{Math.round(e.confidence * 100)}%</span>
+                  )}
+                </span>
+              ) : <span className="flex-1" />}
               <button
                 onClick={() => onToggleEntry(e, !e.suppressed)}
                 disabled={pending}

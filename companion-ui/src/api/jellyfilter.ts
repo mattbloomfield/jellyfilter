@@ -60,6 +60,8 @@ export interface EdlEntry {
   type: "mute" | "skip";
   category: string;
   word?: string;
+  labels?: string[];
+  confidence?: number;
   confidence: number;
   source: string;
   confirmed: boolean;
