@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, addEntry, deleteEntry, type EdlEntry, type NewEntryInput } from "../api/jellyfilter";
+import { fetchEdl, fetchTranscript, toggleWord, suppressEntry, toggleCategory, addEntry, deleteEntry, reprocessItem, type EdlEntry, type NewEntryInput } from "../api/jellyfilter";
 import { getImageUrl, type JellyfinItem } from "../api/jellyfin";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -535,10 +535,14 @@ export function ItemDetail({ items }: { items: JellyfinItem[] }) {
     retry: false,
   });
 
+  const reprocessMutation = useMutation({
+    mutationFn: () => reprocessItem(itemId!),
+  });
+
   if (!itemId) return null;
   const imageTag = item?.ImageTags?.Primary;
-  const activeCount = edl?.entries.filter((e) => e.type === "mute" && !e.suppressed).length;
-  const totalCount = edl?.entries.filter((e) => e.type === "mute").length;
+  const activeCount = edl?.entries.filter((e) => (e.type === "mute" || e.type === "skip") && !e.suppressed).length;
+  const totalCount = edl?.entries.filter((e) => e.type === "mute" || e.type === "skip").length;
 
   return (
     <div>
@@ -560,6 +564,17 @@ export function ItemDetail({ items }: { items: JellyfinItem[] }) {
               {activeCount}/{totalCount} filters active
             </p>
           )}
+          <button
+            onClick={() => {
+              if (confirm("Reprocess this item? This will re-transcribe and run NudeNet. Existing word suppressions will be lost.")) {
+                reprocessMutation.mutate();
+              }
+            }}
+            disabled={reprocessMutation.isPending || reprocessMutation.isSuccess}
+            className="mt-2 text-xs text-gray-600 hover:text-violet-400 disabled:opacity-40 transition-colors"
+          >
+            {reprocessMutation.isSuccess ? "↩ Queued for reprocessing" : reprocessMutation.isPending ? "Queueing…" : "⟳ Reprocess"}
+          </button>
         </div>
       </div>
 

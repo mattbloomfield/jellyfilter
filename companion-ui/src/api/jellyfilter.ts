@@ -143,6 +143,9 @@ export const excludeItem = (jellyfinId: string, path: string) =>
 export const unexcludeItem = (path: string) =>
   req<{ unexcluded: boolean }>("POST", "/unexclude", { path });
 
+export const reprocessItem = (itemId: string) =>
+  req<{ queued: boolean; media_path: string }>("POST", `/reprocess/${itemId}`, {});
+
 export interface PipelineSettings {
   media_paths: string[];
 }

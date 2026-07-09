@@ -370,6 +370,27 @@ class Handler(BaseHTTPRequestHandler):
             db.exclude_item(media_path, jellyfin_id)
             self._send(200, {"excluded": True, "jellyfin_id": jellyfin_id})
 
+        elif path.startswith("/jellyfilter/reprocess/"):
+            # POST /jellyfilter/reprocess/{itemId} — full reprocess (re-transcribe + NudeNet)
+            item_id = path.split("/")[-1]
+            edl_path = Path("/mnt/nfs-media/jellyfilter/edl") / f"{item_id}.jellyfilter.json"
+            if not edl_path.exists():
+                self._send(404, {"error": "no EDL for this item — cannot determine media path"})
+                return
+            doc = json.loads(edl_path.read_text())
+            media_path = doc.get("media_path", "")
+            if not media_path:
+                self._send(400, {"error": "EDL has no media_path"})
+                return
+            # Delete old EDL so it gets rewritten cleanly
+            edl_path.unlink()
+            # Reset or insert queue entry
+            if not db.reprocess_item(media_path):
+                # Not in queue yet — add it
+                db.enqueue(media_path)
+            log.info("Reprocess queued: %s", media_path)
+            self._send(200, {"queued": True, "media_path": media_path})
+
         elif path == "/jellyfilter/unexclude":
             # POST /jellyfilter/unexclude  {"path": "..."}
             body = self._body()

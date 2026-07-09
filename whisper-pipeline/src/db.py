@@ -172,6 +172,18 @@ def unexclude_item(media_path: str) -> bool:
         return result.rowcount > 0
 
 
+def reprocess_item(media_path: str) -> bool:
+    """Reset any item back to 'new' for full reprocessing regardless of current status."""
+    with get_conn() as conn:
+        result = conn.execute(
+            """UPDATE queue SET status='new', started_at=NULL, finished_at=NULL,
+               error_message=NULL, jellyfin_id=NULL, hit_count=NULL, word_count=NULL
+               WHERE media_path=?""",
+            (media_path,),
+        )
+        return result.rowcount > 0
+
+
 def retry_by_id(queue_id: int) -> bool:
     """Reset a failed item by queue row id."""
     with get_conn() as conn:
