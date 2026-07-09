@@ -62,7 +62,6 @@ export interface EdlEntry {
   word?: string;
   labels?: string[];
   confidence?: number;
-  confidence: number;
   source: string;
   confirmed: boolean;
   suppressed?: boolean;
